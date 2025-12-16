@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { log2nlp, type Log2NLPResult } from "@/lib/log2nlp"
 import { Log2NLPResults } from "@/components/log-analysis/log2nlp-results"
+import { DateRangePicker } from "@/components/ui/date-range-picker"
 
 export default function LogExplorerPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
@@ -23,6 +24,8 @@ export default function LogExplorerPage() {
   const [levelFilter, setLevelFilter] = useState<string>("all")
   const [sourceFilter, setSourceFilter] = useState<string>("all")
   const [timeRange, setTimeRange] = useState<string>("24h")
+  const [useAbsoluteDate, setUseAbsoluteDate] = useState(false)
+  const [dateRange, setDateRange] = useState<{ from: Date; to: Date } | undefined>(undefined)
   const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({})
   const [refreshing, setRefreshing] = useState(false)
   const [useNLP, setUseNLP] = useState(true)
@@ -86,7 +89,16 @@ export default function LogExplorerPage() {
     const matchesLevel = levelFilter === "all" || log.level === levelFilter
     const matchesSource = sourceFilter === "all" || log.source === sourceFilter
 
-    return matchesSearch && matchesLevel && matchesSource
+    // Date range filter
+    let matchesDateRange = true
+    if (useAbsoluteDate && dateRange) {
+      const logTime = new Date(log.timestamp || 0).getTime()
+      const fromTime = dateRange.from.getTime()
+      const toTime = dateRange.to.getTime()
+      matchesDateRange = logTime >= fromTime && logTime <= toTime
+    }
+
+    return matchesSearch && matchesLevel && matchesSource && matchesDateRange
   })
 
   const sources = Array.from(new Set(logs.map((log) => log.source)))
@@ -139,54 +151,78 @@ export default function LogExplorerPage() {
                   <TabsTrigger value="advanced">Advanced Query</TabsTrigger>
                 </TabsList>
                 <TabsContent value="basic">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        type="search"
-                        placeholder="Search logs..."
-                        className="pl-8"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                      />
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          type="search"
+                          placeholder="Search logs..."
+                          className="pl-8"
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                      </div>
+                      <Select value={levelFilter} onValueChange={setLevelFilter}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Log Level" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Levels</SelectItem>
+                          <SelectItem value="error">Error</SelectItem>
+                          <SelectItem value="warning">Warning</SelectItem>
+                          <SelectItem value="info">Info</SelectItem>
+                          <SelectItem value="debug">Debug</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={sourceFilter} onValueChange={setSourceFilter}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Source" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Sources</SelectItem>
+                          {sources.map((source) => (
+                            <SelectItem key={source} value={source}>
+                              {source}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={timeRange} onValueChange={setTimeRange} disabled={useAbsoluteDate}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Time Range" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1h">Last Hour</SelectItem>
+                          <SelectItem value="6h">Last 6 Hours</SelectItem>
+                          <SelectItem value="24h">Last 24 Hours</SelectItem>
+                          <SelectItem value="7d">Last 7 Days</SelectItem>
+                          <SelectItem value="30d">Last 30 Days</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
-                    <Select value={levelFilter} onValueChange={setLevelFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Log Level" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Levels</SelectItem>
-                        <SelectItem value="error">Error</SelectItem>
-                        <SelectItem value="warning">Warning</SelectItem>
-                        <SelectItem value="info">Info</SelectItem>
-                        <SelectItem value="debug">Debug</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Select value={sourceFilter} onValueChange={setSourceFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Source" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Sources</SelectItem>
-                        {sources.map((source) => (
-                          <SelectItem key={source} value={source}>
-                            {source}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={timeRange} onValueChange={setTimeRange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Time Range" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1h">Last Hour</SelectItem>
-                        <SelectItem value="6h">Last 6 Hours</SelectItem>
-                        <SelectItem value="24h">Last 24 Hours</SelectItem>
-                        <SelectItem value="7d">Last 7 Days</SelectItem>
-                        <SelectItem value="30d">Last 30 Days</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center gap-4 pt-2 border-t">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id="absolute-date"
+                          checked={useAbsoluteDate}
+                          onCheckedChange={setUseAbsoluteDate}
+                        />
+                        <Label htmlFor="absolute-date" className="cursor-pointer">
+                          Use Absolute Date Range
+                        </Label>
+                      </div>
+                      {useAbsoluteDate && (
+                        <div className="flex-1">
+                          <DateRangePicker
+                            from={dateRange?.from}
+                            to={dateRange?.to}
+                            onDateRangeChange={setDateRange}
+                            placeholder="Select date range"
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </TabsContent>
                 <TabsContent value="advanced">

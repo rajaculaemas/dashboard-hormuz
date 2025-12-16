@@ -1,5 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
+import { QRadarClient } from "@/lib/api/qradar"
+import { getAlerts } from "@/lib/api/stellar-cyber"
+import { getAlerts as getWazuhAlerts, verifyConnection as verifyWazuhConnection } from "@/lib/api/wazuh"
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,9 +15,7 @@ export async function POST(request: NextRequest) {
     console.log("Starting alert sync for integration:", integrationId)
 
     // Get integration details from database
-    const integration = await prisma.integration.findUnique({
-      where: { id: integrationId },
-    })
+    const integration = await prisma.integration.findUnique({ where: { id: integrationId } })
 
     if (!integration) {
       return NextResponse.json({ success: false, error: "Integration not found" }, { status: 404 })
@@ -22,9 +23,8 @@ export async function POST(request: NextRequest) {
 
     console.log("Found integration:", integration.name)
 
-    // Extract credentials from the integration
+    // Build credentials object (handle both array and object shapes)
     let credentials: Record<string, any> = {}
-
     if (Array.isArray(integration.credentials)) {
       const credentialsArray = integration.credentials as any[]
       credentialsArray.forEach((cred) => {
@@ -33,249 +33,274 @@ export async function POST(request: NextRequest) {
         }
       })
     } else {
-      credentials = integration.credentials as Record<string, any>
+      credentials = (integration.credentials as Record<string, any>) || {}
     }
 
-    console.log("Credentials keys:", Object.keys(credentials))
+    const source = (integration.source || "").toString().toLowerCase()
 
-    const host = credentials.host || credentials.STELLAR_CYBER_HOST || ""
-    const userId = credentials.user_id || credentials.STELLAR_CYBER_USER_ID || ""
-    const refreshToken = credentials.refresh_token || credentials.STELLAR_CYBER_REFRESH_TOKEN || ""
-    const tenantId = credentials.tenant_id || credentials.STELLAR_CYBER_TENANT_ID || ""
-
-    console.log("Extracted credentials:", {
-      host: host ? "present" : "missing",
-      userId: userId ? "present" : "missing",
-      refreshToken: refreshToken ? "present" : "missing",
-      tenantId: tenantId ? "present" : "missing",
-    })
-
-    if (!host || !userId || !refreshToken || !tenantId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Missing integration credentials. Please check integration configuration.",
-          details: {
-            host: !host ? "missing" : "ok",
-            userId: !userId ? "missing" : "ok",
-            refreshToken: !refreshToken ? "missing" : "ok",
-            tenantId: !tenantId ? "missing" : "ok",
-          },
-        },
-        { status: 400 },
-      )
-    }
-
-    // Ensure host has protocol
-    const baseUrl = host.startsWith("http") ? host : `https://${host}`
-
-    // Create Basic auth header exactly like Python code
-    const nonce = Date.now()
-    const auth = Buffer.from(`${userId}:${refreshToken}:${nonce}`).toString("base64")
-
-    console.log("Getting access token from:", `${baseUrl}/connect/api/v1/access_token`)
-
-    // Get access token
-    const tokenResponse = await fetch(`${baseUrl}/connect/api/v1/access_token`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      // @ts-ignore
-      agent: require("https").Agent({ rejectUnauthorized: false }),
-    })
-
-    console.log("Token response status:", tokenResponse.status)
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text()
-      console.error("Failed to get access token:", errorText)
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Failed to authenticate with Stellar Cyber",
-          details: errorText,
-        },
-        { status: 401 },
-      )
-    }
-
-    const tokenData = await tokenResponse.json()
-    const accessToken = tokenData.access_token
-
-    if (!accessToken) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "No access token received from Stellar Cyber",
-        },
-        { status: 401 },
-      )
-    }
-
-    console.log("Access token obtained successfully")
-
-    // Calculate time range (last 7 days)
-    const now = new Date()
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-
-    // Build query for alerts
-    const query = `tenantid:${tenantId} AND timestamp:[${sevenDaysAgo.toISOString()} TO ${now.toISOString()}]`
-    const alertsUrl = `${baseUrl}/connect/api/data/aella-ser-*/_search`
-    const params = new URLSearchParams({
-      size: "100",
-      q: query,
-      sort: "timestamp:desc",
-    })
-
-    const finalUrl = `${alertsUrl}?${params}`
-    console.log("Fetching alerts from:", finalUrl)
-
-    // Fetch alerts
-    const alertsResponse = await fetch(finalUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      // @ts-ignore
-      agent: require("https").Agent({ rejectUnauthorized: false }),
-    })
-
-    console.log("Alerts response status:", alertsResponse.status)
-
-    if (!alertsResponse.ok) {
-      const errorText = await alertsResponse.text()
-      console.error("Failed to fetch alerts:", errorText)
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Failed to fetch alerts from Stellar Cyber",
-          details: errorText,
-        },
-        { status: 500 },
-      )
-    }
-
-    const alertsData = await alertsResponse.json()
-    const alerts = alertsData.hits?.hits || []
-
-    console.log("? Total alerts fetched from Stellar Cyber:", alerts.length)
-
-    if (alerts.length === 0) {
-      console.log("No alerts found in time range:", sevenDaysAgo.toISOString(), "to", now.toISOString())
-      return NextResponse.json({
-        success: true,
-        message: "No alerts found in the specified time range",
-        synced: 0,
-        errors: 0,
-      })
-    }
-
-    let syncedCount = 0
-    let errorCount = 0
-
-    // Process each alert
-    for (const alertHit of alerts) {
+    // Wazuh path
+    if (source === "wazuh") {
+      console.log("[Wazuh] Starting sync for:", integrationId)
       try {
-        const alertData = alertHit._source
-        const alertId = alertHit._id
-
-        console.log(`Processing alert: ${alertId} - ${alertData.alert_name || "Unknown"}`)
-
-        // Map Stellar Cyber alert to our schema
-        const mappedAlert = {
-          externalId: alertId,
-          title: alertData.alert_name || alertData.xdr_event?.display_name || "Unknown Alert",
-          description: alertData.xdr_desc || alertData.description || "",
-          severity: String(alertData.severity || 0),
-          status: alertData.event_status || "New",
-          timestamp: new Date(alertData.timestamp || alertData.alert_time || new Date()),
-          integrationId: integrationId,
-          metadata: {
-            // Store complete alert data in metadata for detailed view
-            alert_id: alertId,
-            alert_name: alertData.alert_name,
-            alert_time: alertData.alert_time,
-            severity: alertData.severity,
-            event_status: alertData.event_status,
-            alert_type: alertData.alert_type,
-            closed_time: alertData.closed_time,
-            assignee: alertData.assignee,
-            comment: alertData.comment,
-            tenant_name: alertData.tenant_name,
-            timestamp: alertData.timestamp,
-
-            // Network information
-            srcip: alertData.srcip,
-            dstip: alertData.dstip,
-            srcport: alertData.srcport,
-            dstport: alertData.dstport,
-            protocol: alertData.protocol,
-            srcmac: alertData.srcmac,
-
-            // Application details
-            appid_family: alertData.appid_family,
-            appid_name: alertData.appid_name,
-            appid_stdport: alertData.appid_stdport,
-
-            // Reputation
-            srcip_reputation: alertData.srcip_reputation,
-            dstip_reputation: alertData.dstip_reputation,
-            srcip_username: alertData.srcip_username,
-
-            // Event details
-            repeat_count: alertData.repeat_count,
-            xdr_desc: alertData.xdr_desc,
-            event_type: alertData.event_type,
-            event_name: alertData.event_name,
-            event_score: alertData.event_score,
-            source: alertData.source,
-            score: alertData.score,
-            index: alertData.index,
-          },
+        const isConnected = await verifyWazuhConnection(integrationId)
+        if (!isConnected) {
+          return NextResponse.json(
+            { success: false, error: "Wazuh connection failed" },
+            { status: 500 }
+          )
         }
 
-        // Upsert alert in database
-        await prisma.alert.upsert({
-          where: {
-            externalId: alertId,
-          },
-          update: {
-            title: mappedAlert.title,
-            description: mappedAlert.description,
-            severity: mappedAlert.severity,
-            status: mappedAlert.status,
-            timestamp: mappedAlert.timestamp,
-            metadata: mappedAlert.metadata,
-          },
-          create: mappedAlert,
+        const result = await getWazuhAlerts(integrationId)
+        console.log(`[Wazuh] Synced ${result.count} alerts`)
+
+        await prisma.integration.update({
+          where: { id: integrationId },
+          data: { lastSync: new Date() },
         })
 
-        syncedCount++
-        console.log(`? Synced alert: ${alertId}`)
-      } catch (error) {
-        console.error(`? Error syncing alert ${alertHit._id}:`, error)
-        errorCount++
+        return NextResponse.json({
+          success: true,
+          synced: result.count,
+          total: result.count,
+          errors: 0,
+        })
+      } catch (err) {
+        console.error("[Wazuh] Sync error:", err)
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Wazuh sync failed",
+            details: err instanceof Error ? err.message : String(err),
+          },
+          { status: 500 }
+        )
       }
     }
 
-    // Update integration last sync time
-    await prisma.integration.update({
-      where: { id: integrationId },
-      data: { lastSync: new Date() },
-    })
+    // QRadar path
+    if (source.includes("qradar") || source.includes("siem")) {
+      const qHost = credentials.host || credentials.QRADAR_HOST || ""
+      const apiKey = credentials.api_key || credentials.QRADAR_API_KEY || credentials.apiKey || ""
 
-    console.log(`?? Alert sync completed: ${syncedCount} synced, ${errorCount} errors`)
+      if (!qHost || !apiKey) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Missing QRadar integration credentials. Please check integration configuration (host, api_key).",
+            details: { host: !qHost ? "missing" : "ok", api_key: !apiKey ? "missing" : "ok" },
+          },
+          { status: 400 },
+        )
+      }
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully synced ${syncedCount} alerts`,
-      synced: syncedCount,
-      errors: errorCount,
-      total: alerts.length,
-    })
+      try {
+        const qradarClient = new QRadarClient({ host: qHost, api_key: apiKey })
+        const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+        const offenses = await qradarClient.getOffenses(sevenDaysMs, 100)
+
+        console.log("[v0] QRadar: fetched", offenses.length, "offenses")
+
+        let synced = 0
+        let errors = 0
+
+        for (const off of offenses) {
+          try {
+            const externalId = off.id
+            const mapped: any = {
+              externalId: externalId,
+              title: off.description || `Offense ${externalId}`,
+              description: off.description || null,
+              severity: String(off.severity || "0"),
+              status: off.status || "OPEN",
+              offenseType: off.offense_type ? String(off.offense_type) : null,
+              eventCount: off.event_count || 0,
+              lastUpdatedTime: off.last_updated_time ? new Date(off.last_updated_time) : null,
+              startTime: off.start_time ? new Date(off.start_time) : new Date(),
+              endTime: off.close_time ? new Date(off.close_time) : null,
+              sourceIps: off.source_network ? [off.source_network] : [],
+              destinationIps: Array.isArray(off.destination_networks) ? off.destination_networks : [],
+              metadata: off,
+              integrationId: integrationId,
+            }
+
+            await prisma.qRadarOffense.upsert({
+              where: { externalId: externalId },
+              update: {
+                title: mapped.title,
+                description: mapped.description,
+                severity: mapped.severity,
+                status: mapped.status,
+                offenseType: mapped.offenseType,
+                eventCount: mapped.eventCount,
+                lastUpdatedTime: mapped.lastUpdatedTime || undefined,
+                startTime: mapped.startTime,
+                endTime: mapped.endTime || undefined,
+                sourceIps: mapped.sourceIps,
+                destinationIps: mapped.destinationIps,
+                metadata: mapped.metadata,
+                integrationId: mapped.integrationId,
+              },
+              create: mapped,
+            })
+
+            // NOTE: Related events are now fetched on-demand when user clicks Related Events tab
+            // This improves alert panel loading performance and reduces unnecessary API calls
+
+            // Also upsert into generic alerts table so QRadar offenses appear in the unified alerts feed
+            try {
+              const alertExternalId = `qradar-${integrationId}-${externalId}`
+
+              const mapSeverity = (sev: any) => {
+                const n = Number(sev) || 0
+                if (n >= 9) return "Critical"
+                if (n >= 7) return "High"
+                if (n >= 3) return "Medium"
+                return "Low"
+              }
+
+              const mapStatus = (s: string) => {
+                const st = (s || "").toString().toUpperCase()
+                if (st === "OPEN") return "New"
+                if (st === "FOLLOW_UP") return "In Progress"
+                if (st === "CLOSED") return "Closed"
+                return st || "New"
+              }
+
+              const alertTimestamp = off.last_persisted_time ? new Date(off.last_persisted_time) : off.start_time ? new Date(off.start_time) : new Date()
+
+              // Preserve manual status changes (e.g., In Progress/Closed) so QRadar sync doesn't downgrade them
+              const existingAlert = await prisma.alert.findUnique({ where: { externalId: alertExternalId } })
+              const mappedStatus = mapStatus(off.status)
+              const statusToPersist = existingAlert
+                ? (() => {
+                    const current = existingAlert.status
+                    const downgradeToNew = current === "In Progress" && mappedStatus === "New"
+                    const reopenFromClosed = current === "Closed" && mappedStatus !== "Closed"
+                    return downgradeToNew || reopenFromClosed ? current : mappedStatus
+                  })()
+                : mappedStatus
+
+              // Merge existing QRadar metadata so local flags (e.g., follow_up, assignee) are not lost
+              const mergedMetadata = (() => {
+                const existingMetadata = (existingAlert?.metadata as any) || {}
+                const existingQRadar = existingMetadata.qradar || {}
+                return {
+                  ...existingMetadata,
+                  qradar: { ...existingQRadar, ...off },
+                }
+              })()
+
+              const alertUpsert = {
+                externalId: alertExternalId,
+                title: off.description || `QRadar Offense ${externalId}`,
+                description: off.description || "",
+                severity: mapSeverity(off.severity),
+                status: statusToPersist,
+                timestamp: alertTimestamp,
+                integrationId: integrationId,
+                metadata: mergedMetadata,
+              }
+
+              await prisma.alert.upsert({
+                where: { externalId: alertUpsert.externalId },
+                update: {
+                  title: alertUpsert.title,
+                  description: alertUpsert.description,
+                  severity: alertUpsert.severity,
+                  status: alertUpsert.status,
+                  timestamp: alertUpsert.timestamp,
+                  metadata: alertUpsert.metadata,
+                },
+                create: alertUpsert,
+              })
+            } catch (err) {
+              console.error("[v0] QRadar: error upserting generic alert", off.id, err)
+            }
+
+            synced++
+          } catch (err) {
+            console.error("[v0] QRadar: error upserting offense", off.id, err)
+            errors++
+          }
+        }
+
+        await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+
+        return NextResponse.json({ success: true, synced, total: offenses.length, errors })
+      } catch (err) {
+        console.error("[v0] QRadar sync error:", err)
+        return NextResponse.json({ success: false, error: "Failed to sync QRadar offenses", details: err instanceof Error ? err.message : String(err) }, { status: 500 })
+      }
+    }
+
+    // Stellar Cyber path (default, but now explicit check)
+    if (source.includes("stellar-cyber") || source === "custom") {
+      try {
+        // Check if specific daysBack is requested (for historical syncs)
+        const daysBackParam = request.headers.get("X-Days-Back")
+        const daysBack = daysBackParam ? parseInt(daysBackParam, 10) : undefined
+        
+        // Use higher limit for syncing (Stellar Cyber API supports up to 10000)
+        const alerts = await getAlerts({ integrationId, limit: 10000, daysBack })
+
+      console.log("[v0] Stellar Cyber: fetched", alerts.length, "alerts")
+
+      if (!alerts || alerts.length === 0) {
+        await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+        return NextResponse.json({ success: true, message: "No alerts found in the specified time range", synced: 0, errors: 0 })
+      }
+
+      let syncedCount = 0
+      let errorCount = 0
+
+      for (const a of alerts) {
+        try {
+          const externalId = a._id
+          const mappedAlert = {
+            externalId,
+            title: a.title || "Unknown Alert",
+            description: a.description || "",
+            severity: String(a.severity || "0"),
+            status: a.status || "New",
+            timestamp: a.timestamp ? new Date(a.timestamp) : new Date(),
+            integrationId: integrationId,
+            metadata: a.metadata || {},
+          }
+
+          await prisma.alert.upsert({
+            where: { externalId },
+            update: {
+              title: mappedAlert.title,
+              description: mappedAlert.description,
+              severity: mappedAlert.severity,
+              status: mappedAlert.status,
+              timestamp: mappedAlert.timestamp,
+              metadata: mappedAlert.metadata,
+            },
+            create: mappedAlert,
+          })
+
+          syncedCount++
+        } catch (err) {
+          console.error("[v0] Error syncing alert", err)
+          errorCount++
+        }
+      }
+
+      await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+
+      return NextResponse.json({ success: true, message: `Successfully synced ${syncedCount} alerts`, synced: syncedCount, errors: errorCount, total: alerts.length })
+    } catch (err) {
+      console.error("[v0] Stellar sync error:", err)
+      return NextResponse.json({ success: false, error: "Failed to sync Stellar Cyber alerts", details: err instanceof Error ? err.message : String(err) }, { status: 500 })
+    }
+    }
+
+    // Unsupported integration type
+    return NextResponse.json(
+      { success: false, error: `Unsupported integration type: ${source}` },
+      { status: 400 }
+    )
   } catch (error) {
     console.error("? Error in alert sync:", error)
     return NextResponse.json(

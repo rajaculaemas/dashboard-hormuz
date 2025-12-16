@@ -1,20 +1,43 @@
-generator client {
-  provider = "prisma-client-js"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
 }
 
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  password  String   // hashed password
+  role      String   @default("read-only") // "administrator", "analyst", "read-only"
+  status    String   @default("active") // "active", "inactive"
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  assignedAlerts Alert[]
+  assignedCases  WazuhCase[]
+  caseTimelineEvents WazuhCaseTimeline[]
+  alertTimelines AlertTimeline[]
+  assignedIntegrations UserIntegration[] // Integrasi yang di-assign ke user
+
   @@map("users")
+}
+
+model UserIntegration {
+  id            String @id @default(cuid())
+  userId        String @map("user_id")
+  integrationId String @map("integration_id")
+  
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  @@unique([userId, integrationId])
+  @@map("user_integrations")
 }
 
 model Integration {
@@ -28,8 +51,10 @@ model Integration {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
-  alerts Alert[]
-  cases  Case[]
+  alerts        Alert[]
+  cases         Case[]
+  qradarOffenses QRadarOffense[] @relation("QRadarOffenses")
+  assignedUsers UserIntegration[] // User yang di-assign ke integrasi ini
 
   @@map("integrations")
 }
@@ -39,15 +64,23 @@ model Alert {
   externalId  String   @unique @map("external_id")
   title       String
   description String?
-  severity    String   // "Low", "Medium", "High", "Critical"
+  severity    String?   // "Low", "Medium", "High", "Critical" - optional, set by user via Update Status
   status      String   @default("Open")
   timestamp   DateTime @default(now())
   metadata    Json?    
+  severityBasedOnAnalysis String? @map("severity_based_on_analysis") // "Low", "Medium", "High", "Critical" - custom field from dashboard analysis
+  analysisNotes String? @map("analysis_notes") // Custom notes from analyst
+
+  timeline    AlertTimeline[]
 
   integrationId String
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   
+  assigneeId String?
+  assignee   User? @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  
   relatedCases CaseAlert[]
+  wazuhCaseAlerts WazuhCaseAlert[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -55,8 +88,26 @@ model Alert {
   @@map("alerts")
 }
 
+model AlertTimeline {
+  id              String   @id @default(cuid())
+  alertId         String   @map("alert_id")
+  eventType       String   @map("event_type") // "status_change", "severity_change", "comment", "created"
+  description     String
+  oldValue        String?  @map("old_value")
+  newValue        String?  @map("new_value")
+  changedBy       String?  @map("changed_by")
+  changedByUser   User?    @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
+  changedByUserId String?  @map("changed_by_user_id")
+  timestamp       DateTime @default(now())
+
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@map("alert_timeline")
+  @@index([alertId])
+}
+
 model Case {
-  id            String   @id @default(cuid()) // ? Auto-generate ID
+  id            String   @id @default(cuid())
   externalId     String?   @unique @map("external_id")
   acknowledgedAt DateTime? @map("acknowledged")
   assignee       String?   @map("assignee")
@@ -87,7 +138,7 @@ model Case {
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
   relatedAlerts CaseAlert[]
-  comments     CaseComment[]
+  comments      CaseComment[]
 
   @@map("cases")
   @@unique([id])
@@ -116,3 +167,130 @@ model CaseComment {
 
   @@map("case_comments")
 }
+
+model QRadarOffense {
+  id              String   @id @default(cuid())
+  externalId      Int      @unique @map("external_id")
+  title           String
+  description     String?
+  severity        String
+  status          String   @default("OPEN")
+  offenseType     String?  @map("offense_type")
+  eventCount      Int?     @map("event_count")
+  lastUpdatedTime DateTime? @map("last_updated_time")
+  startTime       DateTime @default(now()) @map("start_time")
+  endTime         DateTime? @map("end_time")
+  sourceIps       String[] @default([]) @map("source_ips")
+  destinationIps  String[] @default([]) @map("destination_ips")
+  metadata        Json?    @default("{}")
+  
+  integrationId   String
+  integration     Integration @relation("QRadarOffenses", fields: [integrationId], references: [id], onDelete: Cascade)
+
+  events  QRadarEvent[]
+  ticket  QRadarTicket?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("qradar_offenses")
+}
+
+model QRadarEvent {
+  id              String   @id @default(cuid())
+  externalId      String   @unique @map("external_id")
+  offenseId       Int      @map("offense_id")
+  eventName       String?  @map("event_name")
+  eventType       String?  @map("event_type")
+  sourceIp        String?  @map("source_ip")
+  destinationIp   String?  @map("destination_ip")
+  sourcePort      Int?     @map("source_port")
+  destinationPort Int?     @map("destination_port")
+  protocol        String?
+  severity        Int?
+  eventTimestamp  DateTime @map("event_timestamp")
+  payload         Json?    @default("{}")
+  metadata        Json?    @default("{}")
+
+  qradarOffense   QRadarOffense @relation(fields: [qradarOffenseId], references: [id], onDelete: Cascade)
+  qradarOffenseId String @map("qradar_offense_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("qradar_events")
+}
+
+model QRadarTicket {
+  id              String   @id @default(cuid())
+  ticketNumber    String   @unique @map("ticket_number")
+  offenseId       Int      @unique @map("offense_id")
+  description     String?
+  status          String   @default("OPEN")
+  
+  qradarOffense   QRadarOffense @relation(fields: [qradarOffenseId], references: [id], onDelete: Cascade)
+  qradarOffenseId String @unique @map("qradar_offense_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("qradar_tickets")
+}
+
+model WazuhCase {
+  id          String @id @default(cuid())
+  caseNumber  String @unique @map("case_number") // "0001", "0002", etc.
+  title       String @default("Untitled Case") // Case name/title set by user
+  status      String @default("open") // "open", "in_progress", "resolved"
+  severity    String? // "Low", "Medium", "High", "Critical" - set via update status
+  
+  assigneeId  String?
+  assignee    User? @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  
+  description String?
+  notes       String?
+
+  alertCount  Int @default(0) @map("alert_count")
+  
+  createdBy   String?
+  createdById String?
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  resolvedAt  DateTime? @map("resolved_at")
+
+  alerts WazuhCaseAlert[]
+  timeline WazuhCaseTimeline[]
+
+  @@map("wazuh_cases")
+}
+
+model WazuhCaseTimeline {
+  id          String @id @default(cuid())
+  caseId      String @map("case_id")
+  eventType   String @map("event_type") // "status_change", "assignee_change", "severity_change", "created", "resolved"
+  description String // Human readable description
+  oldValue    String? @map("old_value") // Previous value
+  newValue    String? @map("new_value") // New value
+  changedBy   String? @map("changed_by") // User who made the change or "System"
+  changedByUser User? @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
+  changedByUserId String? @map("changed_by_user_id")
+  timestamp   DateTime @default(now())
+
+  case WazuhCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@map("wazuh_case_timeline")
+}
+
+model WazuhCaseAlert {
+  id        String @id @default(cuid())
+  caseId    String @map("case_id")
+  alertId   String @map("alert_id")
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  case  WazuhCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, alertId])
+  @@map("wazuh_case_alerts")
+}
+

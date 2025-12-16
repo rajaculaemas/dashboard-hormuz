@@ -37,29 +37,40 @@ export class StellarCyberCaseClient {
       refreshToken: this.refreshToken.substring(0, 10) + "...",
     })
 
-    const response = await fetch(`${this.baseUrl}/access_token`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      // @ts-ignore - Node.js fetch supports agent
-      agent: httpsAgent,
-    })
-
-    console.log("Access token response status:", response.status)
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("Access token error:", errorText)
-      throw new Error(`Failed to get access token: ${response.status} - ${errorText}`)
+    // Set NODE_TLS_REJECT_UNAUTHORIZED at runtime for this fetch
+    const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    if (this.host.startsWith("https://")) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
     }
 
-    const data = await response.json()
-    console.log("Fresh access token obtained successfully")
-    console.log("Full Access Token:\n", data.access_token) // tampilkan semua
-    console.log("Token (first 10 chars):", data.access_token.substring(0, 10) + "...")
-    return data.access_token
+    try {
+      const response = await fetch(`${this.baseUrl}/access_token`, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      })
+
+      console.log("Access token response status:", response.status)
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error("Access token error:", errorText)
+        throw new Error(`Failed to get access token: ${response.status} - ${errorText}`)
+      }
+
+      const data = await response.json()
+      console.log("Fresh access token obtained successfully")
+      console.log("Full Access Token:\n", data.access_token) // tampilkan semua
+      console.log("Token (first 10 chars):", data.access_token.substring(0, 10) + "...")
+      return data.access_token
+    } finally {
+      // Restore original value
+      if (originalRejectUnauthorized !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+      }
+    }
   }
 
   async getCases(params: {
@@ -89,36 +100,41 @@ export class StellarCyberCaseClient {
     const url = `${this.baseUrl}/cases?${queryParams.toString()}`
     console.log("Making request to:", url)
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      // @ts-ignore - Node.js fetch supports agent
-      agent: httpsAgent,
-    })
-
-    console.log("Response status:", response.status)
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("API error:", errorText)
-      throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+    // Set NODE_TLS_REJECT_UNAUTHORIZED at runtime
+    const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    if (this.host.startsWith("https://")) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
     }
 
-    const result = await response.json()
-    console.log("Cases response received, processing...")
-
-    // Log detailed case information
-    if (result.data && result.data.cases) {
-      console.log(`Total cases from API: ${result.data.cases.length}`)
-
-      // Log status distribution
-      const statusCounts = {}
-      result.data.cases.forEach((c) => {
-        statusCounts[c.status] = (statusCounts[c.status] || 0) + 1
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       })
-      console.log("Status distribution from Stellar Cyber:", statusCounts)
+
+      console.log("Response status:", response.status)
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error("API error:", errorText)
+        throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      console.log("Cases response received, processing...")
+
+      // Log detailed case information
+      if (result.data && result.data.cases) {
+        console.log(`Total cases from API: ${result.data.cases.length}`)
+
+        // Log status distribution
+        const statusCounts = {}
+        result.data.cases.forEach((c) => {
+          statusCounts[c.status] = (statusCounts[c.status] || 0) + 1
+        })
+        console.log("Status distribution from Stellar Cyber:", statusCounts)
 
       // Log first few cases with details
       console.log("First 3 cases details:")
@@ -135,7 +151,13 @@ export class StellarCyberCaseClient {
       })
     }
 
-    return result
+      return result
+    } finally {
+      // Restore original value
+      if (originalRejectUnauthorized !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+      }
+    }
   }
 
   // Implement exactly like Python getCases function but for alerts
@@ -194,31 +216,150 @@ export class StellarCyberCaseClient {
     const token = await this.getAccessToken()
     const url = `${this.baseUrl}/cases/${caseId}`
 
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(updates),
-      // @ts-ignore - Node.js fetch supports agent
-      agent: httpsAgent,
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("API error:", errorText)
-      throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+    // Set NODE_TLS_REJECT_UNAUTHORIZED at runtime
+    const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    if (this.host.startsWith("https://")) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
     }
 
-    const result = await response.json()
-    console.log("Case updated successfully:", result)
+    try {
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(updates),
+      })
 
-    // Return success format that our code expects
-    return {
-      success: true,
-      data: result.data || result,
-      message: "Case updated successfully",
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error("API error:", errorText)
+        throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      console.log("Case updated successfully:", result)
+
+      // Return success format that our code expects
+      return {
+        success: true,
+        data: result.data || result,
+        message: "Case updated successfully",
+      }
+    } finally {
+      // Restore original value
+      if (originalRejectUnauthorized !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+      }
+    }
+  }
+
+  async getCase(caseId: string) {
+    console.log("Fetching case:", caseId)
+
+    const token = await this.getAccessToken()
+    const url = `${this.baseUrl}/cases/${caseId}`
+
+    // Set NODE_TLS_REJECT_UNAUTHORIZED at runtime
+    const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    if (this.host.startsWith("https://")) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error("API error:", errorText)
+        throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      console.log("Case fetched successfully:", result)
+
+      // Return the case data
+      return {
+        success: true,
+        data: result.data || result,
+        message: "Case fetched successfully",
+      }
+    } finally {
+      // Restore original value
+      if (originalRejectUnauthorized !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+      }
+    }
+  }
+
+  async createCase(caseData: {
+    name: string
+    alerts: Array<{
+      _id: string
+      _index: string
+    }>
+    cust_id?: string
+    severity?: string
+    status?: string
+    assignee?: string
+    tags?: string[]
+    comment?: string
+  }) {
+    console.log("Creating case with data:", caseData)
+
+    const token = await this.getAccessToken()
+    const url = `${this.baseUrl}/cases`
+
+    // Set NODE_TLS_REJECT_UNAUTHORIZED at runtime
+    const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    if (this.host.startsWith("https://")) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: caseData.name,
+          alerts: caseData.alerts || [],
+          cust_id: caseData.cust_id || "",
+          severity: caseData.severity || "Low",
+          status: caseData.status || "New",
+          assignee: caseData.assignee || "",
+          tags: caseData.tags || [],
+          comment: caseData.comment || "",
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error("API error:", errorText)
+        throw new Error(`Stellar Cyber API error: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      console.log("Case created successfully:", result)
+
+      return {
+        success: true,
+        data: result.data || result,
+        message: "Case created successfully",
+      }
+    } finally {
+      // Restore original value
+      if (originalRejectUnauthorized !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+      }
     }
   }
 
@@ -381,11 +522,33 @@ export async function getCaseAlerts(params: { caseId: string; integrationId?: st
       return []
     }
 
-    return alerts.map((doc: any) => {
+    return alerts.map((doc: any, idx: number) => {
       // Handle different response structures
       const source = doc._source || doc
       const xdr_event = source.xdr_event || {}
       const stellar = source.stellar || {}
+
+      console.log(`Alert ${idx} source fields:`, {
+        stellar_alert_time: stellar.alert_time,
+        source_timestamp: source.timestamp,
+        source_created_at: source.created_at,
+        source_alert_time: source.alert_time,
+        all_keys: Object.keys(source).slice(0, 20), // First 20 keys for debug
+      })
+
+      // Normalize alert_time to milliseconds
+      // Try to find the actual alert timestamp field
+      let alertTimeMs = source.alert_time || stellar.alert_time || source.timestamp || source.created_at || Date.now()
+      
+      // Convert to milliseconds if needed
+      if (typeof alertTimeMs === "string") {
+        alertTimeMs = new Date(alertTimeMs).getTime()
+      } else if (typeof alertTimeMs === "number" && alertTimeMs < 1000000000000) {
+        // If it's a number < year 2001 in ms, assume it's in seconds
+        alertTimeMs = alertTimeMs * 1000
+      }
+
+      console.log(`Alert ${idx} alert_time: raw=${alertTimeMs}, ms=${alertTimeMs}, date=${new Date(alertTimeMs)}`)
 
       return {
         _id: doc._id || doc.id || `alert-${Date.now()}-${Math.random()}`,
@@ -394,7 +557,7 @@ export async function getCaseAlerts(params: { caseId: string; integrationId?: st
           display_name: xdr_event.display_name || source.event_name || source.name || "Unknown Alert",
         },
         severity: source.severity || "medium",
-        alert_time: stellar.alert_time || source.timestamp || source.created_at || Date.now(),
+        alert_time: alertTimeMs, // Always in milliseconds
         status: source.event_status || stellar.status || source.status || "New",
         source_ip: source.srcip || source.source_ip,
         dest_ip: source.dstip || source.dest_ip,
@@ -440,6 +603,82 @@ export async function updateCaseInStellarCyber(params: {
     return response
   } catch (error) {
     console.error("Error updating case in Stellar Cyber:", error)
+    throw error
+  }
+}
+
+// Helper function to get single case from Stellar Cyber
+export async function getSingleCaseFromStellarCyber(params: {
+  caseId: string
+  integrationId?: string
+}) {
+  try {
+    const credentials = await getStellarCyberCredentials(params.integrationId)
+
+    if (!credentials.HOST || !credentials.USER_ID || !credentials.TENANT_ID || !credentials.REFRESH_TOKEN) {
+      throw new Error("Missing Stellar Cyber credentials")
+    }
+
+    const client = new StellarCyberCaseClient(
+      credentials.HOST,
+      credentials.USER_ID,
+      credentials.TENANT_ID,
+      credentials.REFRESH_TOKEN,
+    )
+
+    const response = await client.getCase(params.caseId)
+
+    console.log("Case fetched from Stellar Cyber:", response)
+    return response
+  } catch (error) {
+    console.error("Error fetching case from Stellar Cyber:", error)
+    throw error
+  }
+}
+
+export async function createCaseInStellarCyber(params: {
+  name: string
+  alerts: Array<{
+    _id: string
+    _index: string
+  }>
+  cust_id?: string
+  severity?: string
+  status?: string
+  assignee?: string
+  tags?: string[]
+  comment?: string
+  integrationId?: string
+}) {
+  try {
+    const credentials = await getStellarCyberCredentials(params.integrationId)
+
+    if (!credentials.HOST || !credentials.USER_ID || !credentials.TENANT_ID || !credentials.REFRESH_TOKEN) {
+      throw new Error("Missing Stellar Cyber credentials")
+    }
+
+    const client = new StellarCyberCaseClient(
+      credentials.HOST,
+      credentials.USER_ID,
+      credentials.TENANT_ID,
+      credentials.REFRESH_TOKEN,
+    )
+
+    const response = await client.createCase({
+      name: params.name,
+      alerts: params.alerts,
+      cust_id: params.cust_id,
+      severity: params.severity,
+      status: params.status,
+      assignee: params.assignee,
+      tags: params.tags,
+      comment: params.comment,
+    })
+
+    console.log("Case created in Stellar Cyber:", response)
+    return response
+  } catch (error) {
+    console.error("Error creating case in Stellar Cyber:", error)
     throw error
   }
 }

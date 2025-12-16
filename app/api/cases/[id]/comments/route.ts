@@ -3,7 +3,7 @@ import prisma from "@/lib/prisma"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { id } = params
+    const { id } = await params
 
     console.log("Fetching comments for case ID:", id)
 

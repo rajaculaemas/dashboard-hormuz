@@ -10,7 +10,9 @@ export type AlertStatus = "New" | "In Progress" | "Ignored" | "Closed"
 // Menyesuaikan model data berdasarkan format respons API yang sebenarnya
 export interface StellarCyberAlert {
   _id?: string
+  _index?: string
   index?: string
+  cust_id?: string
   title?: string
   description?: string
   severity?: string

@@ -1,0 +1,239 @@
+# Wazuh SIEM Integration - Complete Implementation Summary
+
+## 📋 Executive Summary
+
+The SOC Dashboard now fully supports **Wazuh SIEM** as a native integration alongside Stellar Cyber and QRadar. Users can:
+
+✅ Connect to Wazuh Elasticsearch for alert discovery
+✅ View Wazuh alerts in unified dashboard
+✅ Manage alert status independently from Wazuh
+✅ Assign alerts to team members
+✅ Add alerts to cases
+✅ Search and filter alerts
+✅ Auto-sync every 3 minutes
+✅ Manual sync on-demand
+
+---
+
+## 📁 Files Created (5 new files)
+
+### 1. Core API - Elasticsearch Client
+**File**: `lib/api/wazuh-client.ts` (199 lines)
+- `WazuhClient` class for Elasticsearch queries
+- Alert search with timestamp filtering
+- Severity mapping (numeric → string)
+- Network data extraction
+- MITRE ATT&CK mapping
+- Error handling and retry logic
+
+**Key Functions**:
+- `searchAlerts(sinceTimestamp?: string): Promise<WazuhAlert[]>`
+- `mapRuleLevelToSeverity(level: number): string`
+
+### 2. Application Integration Layer
+**File**: `lib/api/wazuh.ts` (170 lines)
+- `getAlerts()` - Fetch and store alerts
+- `verifyConnection()` - Test connectivity
+- `updateAlertStatus()` - Update status
+- Credentials management
+- Database persistence
+
+**Key Functions**:
+- `getAlerts(integrationId?: string): Promise<any>`
+- `verifyConnection(integrationId: string): Promise<boolean>`
+- `updateAlertStatus(externalId: string, status, assignee?): Promise<any>`
+- `getWazuhCredentials(integrationId?: string): Promise<WazuhCredentials>`
+
+### 3. Wazuh Sync Endpoint
+**File**: `app/api/alerts/wazuh/sync/route.ts` (61 lines)
+- POST endpoint: `/api/alerts/wazuh/sync`
+- Handles Wazuh-specific sync operations
+- Returns: `{ success, count, message, integration }`
+- Error handling and logging
+
+### 4. Integration Guide
+**File**: `WAZUH_INTEGRATION.md` (412 lines)
+- Complete setup instructions
+- Alert flow diagrams
+- API reference
+- Troubleshooting guide
+- Security notes
+- Performance considerations
+
+### 5. Quick Start Guide
+**File**: `WAZUH_QUICKSTART.md` (245 lines)
+- 5-minute setup guide
+- Step-by-step instructions
+- Testing checklist
+- Common troubleshooting
+- Dashboard feature overview
+
+### 6. Implementation Details
+**File**: `WAZUH_IMPLEMENTATION.md` (380 lines)
+- Technical implementation summary
+- File changes overview
+- Database schema notes
+- API endpoints reference
+- Security considerations
+
+### 7. Test Suite
+**File**: `scripts/test-wazuh-integration.ts` (213 lines)
+- Integration test suite
+- Tests Elasticsearch connectivity
+- Verifies database setup
+- Tests alert storage
+- Tests status updates
+- Run: `npx ts-node scripts/test-wazuh-integration.ts`
+
+### 8. Setup Verification Script
+**File**: `scripts/verify-wazuh-setup.sh` (132 lines)
+- Bash script to verify installation
+- Checks all files are present
+- Verifies code modifications
+- Run: `bash scripts/verify-wazuh-setup.sh`
+
+---
+
+## 🔄 Files Modified (6 existing files)
+
+### 1. Integration Form Component
+**File**: `components/integration/integration-form.tsx`
+**Changes**:
+- Line ~85: Added Wazuh to credential initialization
+```typescript
+else if (source === "wazuh") {
+  setCredentials([
+    { key: "elasticsearch_url", value: "", isSecret: false },
+    { key: "elasticsearch_username", value: "", isSecret: false },
+    { key: "elasticsearch_password", value: "", isSecret: true },
+    { key: "elasticsearch_index", value: "wazuh-*", isSecret: false },
+  ])
+}
+```
+- Line ~185: Added "Wazuh SIEM" to source dropdown
+
+**Impact**: Users can now create Wazuh integrations through the UI
+
+### 2. Sync Status Component
+**File**: `components/alert/sync-status.tsx`
+**Changes**:
+- Line ~17: Added "wazuh" to integration filter
+```typescript
+const allIntegrations = integrations.filter(
+  (i) => i.source === "stellar-cyber" || i.source === "qradar" || i.source === "wazuh"
+)
+```
+- Line ~40: Added Wazuh endpoint routing
+```typescript
+const isWazuh = integration?.source === "wazuh"
+const endpoint = isWazuh ? "/api/alerts/wazuh/sync" : "/api/alerts/sync"
+```
+
+**Impact**: Sync status shows Wazuh integrations with proper endpoint routing
+
+### 3. Alert Panel Dashboard
+**File**: `app/dashboard/page.tsx`
+**Changes**:
+- Line ~255: Added Wazuh status options
+```typescript
+if (integration.source === "wazuh" || name.includes("wazuh")) {
+  return [
+    { value: "all", label: "All Status" },
+    { value: "Open", label: "Open" },
+    { value: "In Progress", label: "In Progress" },
+    { value: "Closed", label: "Closed" },
+  ]
+}
+```
+
+**Impact**: Dashboard shows correct status options for Wazuh alerts
+
+### 4. Auto-Sync Endpoint
+**File**: `app/api/alerts/auto-sync/route.ts`
+**Changes**:
+- Line ~4: Updated integration query to include Wazuh
+```typescript
+source: {
+  in: ["stellar-cyber", "qradar", "wazuh"],
+}
+```
+- Line ~25: Route-specific sync endpoint for Wazuh
+```typescript
+const syncPath = integration.source === "wazuh" ? "/alerts/wazuh/sync" : "/alerts/sync"
+```
+
+**Impact**: Auto-sync now includes Wazuh integrations
+
+### 5. Alert Update Endpoint
+**File**: `app/api/alerts/update/route.ts`
+**Changes**:
+- Line ~11: Added assignee parameter
+- Line ~22: Expanded valid statuses to include Wazuh statuses
+- Line ~44: Added Wazuh update support
+```typescript
+else if (alert.integration.source === "wazuh" && alert.externalId) {
+  try {
+    await updateWazuhAlertStatus(alert.externalId, normalizedStatus as any, assignee)
+  } catch (error) {
+    console.error("Error updating alert status in Wazuh:", error)
+  }
+}
+```
+
+**Impact**: Alert status updates work for Wazuh alerts
+
+### 6. Integration Types
+**File**: `lib/types/integration.ts`
+**Changes**:
+- Added "wazuh" to `IntegrationSource` union type
+```typescript
+export type IntegrationSource =
+  | "stellar-cyber"
+  | "firewall"
+  | "edr"
+  | "antivirus"
+  | "qradar"
+  | "wazuh"  // <-- NEW
+  | "waf"
+  | "endpoint"
+  | "siem"
+  | "custom"
+```
+
+**Impact**: TypeScript support for Wazuh integration type
+
+---
+
+## 📊 Code Statistics
+
+| Metric | Value |
+|--------|-------|
+| New files created | 8 |
+| Existing files modified | 6 |
+| Total new lines of code | ~1,500+ |
+| New API endpoints | 1 |
+| Modified API endpoints | 2 |
+| New database models | 0 (uses existing schema) |
+| New types | 2 |
+
+---
+
+## 🏗️ Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  SOC Dashboard UI                        │
+│  ┌─────────────────┬──────────────┬──────────────┐     │
+│  │ Integrations    │ Alert Panel  │ Cases        │     │
+│  │ (add Wazuh)     │ (view/filter)│ (manage)     │     │
+│  └────────┬────────┴──────┬───────┴──────────────┘     │
+└───────────┼────────────────┼──────────────────────────────┘
+            │                │
+┌───────────┼────────────────┼──────────────────────────────┐
+│           │                │        API Layer             │
+│  ┌────────▼───┐  ┌────────▼──────┐  ┌──────────────┐   │
+│  │ Integration│  │ Alert Endpoints  │  │ Auto-sync   │   │
+│  │ Routes     │  │ - GET /alerts    │  │ Routes      │   │
+│  │            │  │ - POST /update   │  │             │   │
+│  │            │  │ - POST /sync     │  │             │   │
+│  │ - Create   │  │ - POST /wazuh/sync

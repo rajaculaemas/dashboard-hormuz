@@ -63,14 +63,31 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
         setCredentials([])
       }
     } else {
-      // Default credentials based on method
+      // Default credentials based on source and method
       if (method === "api") {
-        setCredentials([
-          { key: "host", value: "", isSecret: false },
-          { key: "user_id", value: "", isSecret: false },
-          { key: "refresh_token", value: "", isSecret: true },
-          { key: "tenant_id", value: "", isSecret: false },
-        ])
+        if (source === "qradar") {
+          setCredentials([
+            { key: "host", value: "", isSecret: false },
+            { key: "api_key", value: "", isSecret: true },
+          ])
+        } else if (source === "stellar-cyber") {
+          setCredentials([
+            { key: "host", value: "", isSecret: false },
+            { key: "user_id", value: "", isSecret: false },
+            { key: "refresh_token", value: "", isSecret: true },
+            { key: "tenant_id", value: "", isSecret: false },
+          ])
+        } else if (source === "wazuh") {
+          setCredentials([
+            { key: "elasticsearch_url", value: "", isSecret: false },
+            { key: "elasticsearch_username", value: "", isSecret: false },
+            { key: "elasticsearch_password", value: "", isSecret: true },
+            { key: "elasticsearch_index", value: "wazuh-*", isSecret: false },
+          ])
+        } else {
+          // generic API defaults (empty - let user add)
+          setCredentials([])
+        }
       } else if (method === "agent") {
         setCredentials([
           { key: "agent_id", value: "", isSecret: false },
@@ -80,7 +97,7 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
         setCredentials([])
       }
     }
-  }, [integration, method])
+  }, [integration, method, source])
 
   const handleAddCredential = () => {
     setCredentials([...credentials, { key: "", value: "", isSecret: false }])
@@ -203,6 +220,8 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="stellar-cyber">Stellar Cyber</SelectItem>
+                <SelectItem value="qradar">QRadar</SelectItem>
+                <SelectItem value="wazuh">Wazuh SIEM</SelectItem>
                 <SelectItem value="firewall">Firewall</SelectItem>
                 <SelectItem value="edr">EDR</SelectItem>
                 <SelectItem value="antivirus">Antivirus</SelectItem>
@@ -252,6 +271,7 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="endpoint">Endpoint</SelectItem>
+                <SelectItem value="qradar">QRadar</SelectItem>
                 <SelectItem value="firewall">Firewall</SelectItem>
                 <SelectItem value="waf">WAF</SelectItem>
                 <SelectItem value="siem">SIEM</SelectItem>

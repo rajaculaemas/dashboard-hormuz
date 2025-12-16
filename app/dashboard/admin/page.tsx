@@ -1,545 +1,558 @@
-"use client"
+'use client';
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Users, Search, Plus, Edit, Eye, Download, RefreshCw } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+export const dynamic = 'force-dynamic';
+
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/lib/auth/auth-context';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-import { useAuthStore, type UserRole } from "@/lib/stores/auth-store"
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { useToast } from '@/hooks/use-toast';
+import { Loader2, Plus, Trash2, Edit2 } from 'lucide-react';
 
 interface User {
-  id: string
-  name: string
-  email: string
-  role: UserRole
-  status: "active" | "inactive" | "pending"
-  lastLogin?: string
-  avatar?: string
+  id: string;
+  email: string;
+  name: string;
+  role: 'administrator' | 'analyst' | 'read-only';
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  assignedIntegrations?: { integrationId: string; integration: { id: string; name: string } }[];
 }
 
-interface AuditLog {
-  id: string
-  user: {
-    name: string
-    email: string
-    avatar?: string
-  }
-  action: string
-  resource: string
-  timestamp: string
-  ip: string
-  status: "success" | "failure"
-  details?: string
+interface Integration {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
 }
 
 export default function AdminPage() {
-  const router = useRouter()
-  const { user } = useAuthStore()
-  const [users, setUsers] = useState<User[]>([
-    {
-      id: "1",
-      name: "Admin User",
-      email: "admin@example.com",
-      role: "admin",
-      status: "active",
-      lastLogin: "2023-05-15T08:30:00Z",
-      avatar: "/placeholder.svg?height=40&width=40",
-    },
-    {
-      id: "2",
-      name: "Security Analyst",
-      email: "analyst@example.com",
-      role: "analyst",
-      status: "active",
-      lastLogin: "2023-05-14T14:45:00Z",
-      avatar: "/placeholder.svg?height=40&width=40",
-    },
-    {
-      id: "3",
-      name: "SOC Operator",
-      email: "operator@example.com",
-      role: "operator",
-      status: "active",
-      lastLogin: "2023-05-13T11:20:00Z",
-      avatar: "/placeholder.svg?height=40&width=40",
-    },
-    {
-      id: "4",
-      name: "Security Trainee",
-      email: "trainee@example.com",
-      role: "trainee",
-      status: "active",
-      lastLogin: "2023-05-12T09:15:00Z",
-      avatar: "/placeholder.svg?height=40&width=40",
-    },
-    {
-      id: "5",
-      name: "New Analyst",
-      email: "new.analyst@example.com",
-      role: "analyst",
-      status: "pending",
-      avatar: "/placeholder.svg?height=40&width=40",
-    },
-  ])
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [users, setUsers] = useState<User[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openDialog, setOpenDialog] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [formData, setFormData] = useState({
+    email: '',
+    name: '',
+    password: '',
+    role: 'analyst' as const,
+    integrationIds: [] as string[],
+  });
+  const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
 
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
-    {
-      id: "log-1",
-      user: {
-        name: "Admin User",
-        email: "admin@example.com",
-        avatar: "/placeholder.svg?height=40&width=40",
-      },
-      action: "login",
-      resource: "system",
-      timestamp: "2023-05-15T08:30:00Z",
-      ip: "192.168.1.100",
-      status: "success",
-    },
-    {
-      id: "log-2",
-      user: {
-        name: "Security Analyst",
-        email: "analyst@example.com",
-        avatar: "/placeholder.svg?height=40&width=40",
-      },
-      action: "view",
-      resource: "alert",
-      timestamp: "2023-05-15T09:15:00Z",
-      ip: "192.168.1.101",
-      status: "success",
-    },
-    {
-      id: "log-3",
-      user: {
-        name: "SOC Operator",
-        email: "operator@example.com",
-        avatar: "/placeholder.svg?height=40&width=40",
-      },
-      action: "update",
-      resource: "incident",
-      timestamp: "2023-05-15T10:45:00Z",
-      ip: "192.168.1.102",
-      status: "success",
-    },
-    {
-      id: "log-4",
-      user: {
-        name: "Unknown User",
-        email: "unknown@example.com",
-      },
-      action: "login",
-      resource: "system",
-      timestamp: "2023-05-15T11:30:00Z",
-      ip: "203.0.113.100",
-      status: "failure",
-      details: "Invalid credentials",
-    },
-    {
-      id: "log-5",
-      user: {
-        name: "Admin User",
-        email: "admin@example.com",
-        avatar: "/placeholder.svg?height=40&width=40",
-      },
-      action: "create",
-      resource: "user",
-      timestamp: "2023-05-15T12:15:00Z",
-      ip: "192.168.1.100",
-      status: "success",
-      details: "Created user: new.analyst@example.com",
-    },
-  ])
-
-  const [searchTerm, setSearchTerm] = useState("")
-  const [roleFilter, setRoleFilter] = useState<string>("all")
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [actionFilter, setActionFilter] = useState<string>("all")
-  const [refreshing, setRefreshing] = useState(false)
-
-  // Redirect if not admin
   useEffect(() => {
-    if (user?.role !== "admin") {
-      router.push("/dashboard")
+    if (user && user.role !== 'administrator') {
+      toast({
+        title: 'Access Denied',
+        description: 'Only administrators can access this page.',
+        variant: 'destructive',
+      });
     }
-  }, [user, router])
+  }, [user, toast]);
 
-  const filteredUsers = users.filter((user) => {
+  useEffect(() => {
+    fetchUsers();
+    fetchIntegrations();
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('/api/auth/users');
+      if (!response.ok) throw new Error('Failed to fetch users');
+
+      const data = await response.json();
+      setUsers(data.users || []);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch users',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchIntegrations = async () => {
+    try {
+      const response = await fetch('/api/integrations');
+      if (!response.ok) throw new Error('Failed to fetch integrations');
+
+      const data = await response.json();
+      setIntegrations(data.data || []);
+    } catch (error) {
+      console.error('Failed to fetch integrations:', error);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (formData.role !== 'administrator' && formData.integrationIds.length === 0) {
+      toast({
+        title: 'Error',
+        description: 'Non-administrator users must be assigned to at least one integration',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (editingUser) {
+      try {
+        const response = await fetch(`/api/auth/users/${editingUser.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: formData.name,
+            role: formData.role,
+            integrationIds: formData.integrationIds,
+            ...(formData.password && { password: formData.password }),
+          }),
+        });
+
+        if (!response.ok) throw new Error('Failed to update user');
+
+        toast({
+          title: 'Success',
+          description: 'User updated successfully',
+        });
+
+        setOpenDialog(false);
+        setEditingUser(null);
+        setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+        fetchUsers();
+      } catch (error) {
+        toast({
+          title: 'Error',
+          description: 'Failed to update user',
+          variant: 'destructive',
+        });
+      }
+    } else {
+      if (!formData.password) {
+        toast({
+          title: 'Error',
+          description: 'Password is required for new users',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData),
+        });
+
+        if (!response.ok) throw new Error('Failed to create user');
+
+        toast({
+          title: 'Success',
+          description: 'User created successfully',
+        });
+
+        setOpenDialog(false);
+        setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+        fetchUsers();
+      } catch (error) {
+        toast({
+          title: 'Error',
+          description: 'Failed to create user',
+          variant: 'destructive',
+        });
+      }
+    }
+  };
+
+  const handleEdit = (u: User) => {
+    setEditingUser(u);
+    setFormData({
+      email: u.email,
+      name: u.name,
+      password: '',
+      role: u.role,
+      integrationIds: u.assignedIntegrations?.map(ai => ai.integrationId) || [],
+    });
+    setOpenDialog(true);
+  };
+
+  const handleDelete = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user?')) return;
+
+    try {
+      const response = await fetch(`/api/auth/users/${userId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) throw new Error('Failed to delete user');
+
+      toast({
+        title: 'Success',
+        description: 'User deleted successfully',
+      });
+
+      fetchUsers();
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to delete user',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleCloseDialog = () => {
+    setOpenDialog(false);
+    setEditingUser(null);
+    setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+  };
+
+  const toggleIntegration = (integrationId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      integrationIds: prev.integrationIds.includes(integrationId)
+        ? prev.integrationIds.filter(id => id !== integrationId)
+        : [...prev.integrationIds, integrationId]
+    }));
+  };
+
+  const filteredUsers = users.filter((u) => {
     const matchesSearch =
-      searchTerm === "" ||
-      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase())
+      searchTerm === '' ||
+      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.email.toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesRole = roleFilter === "all" || user.role === roleFilter
-    const matchesStatus = statusFilter === "all" || user.status === statusFilter
+    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
 
-    return matchesSearch && matchesRole && matchesStatus
-  })
+    return matchesSearch && matchesRole;
+  });
 
-  const filteredAuditLogs = auditLogs.filter((log) => {
-    const matchesSearch =
-      searchTerm === "" ||
-      log.user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.resource.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.ip.includes(searchTerm)
-
-    const matchesAction = actionFilter === "all" || log.action === actionFilter
-
-    return matchesSearch && matchesAction
-  })
-
-  const handleRefresh = () => {
-    setRefreshing(true)
-    setTimeout(() => {
-      setRefreshing(false)
-    }, 1000)
-  }
-
-  const getRoleBadge = (role: string) => {
-    switch (role) {
-      case "admin":
-        return <Badge className="bg-red-500/10 text-red-500">Admin</Badge>
-      case "analyst":
-        return <Badge className="bg-blue-500/10 text-blue-500">Analyst</Badge>
-      case "operator":
-        return <Badge className="bg-green-500/10 text-green-500">Operator</Badge>
-      case "trainee":
-        return <Badge className="bg-yellow-500/10 text-yellow-500">Trainee</Badge>
-      default:
-        return null
-    }
-  }
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return (
-          <Badge variant="outline" className="bg-green-500/10 text-green-500">
-            Active
-          </Badge>
-        )
-      case "inactive":
-        return (
-          <Badge variant="outline" className="bg-gray-500/10 text-gray-500">
-            Inactive
-          </Badge>
-        )
-      case "pending":
-        return (
-          <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500">
-            Pending
-          </Badge>
-        )
-      default:
-        return null
-    }
-  }
-
-  const getActionBadge = (action: string) => {
-    switch (action) {
-      case "login":
-        return (
-          <Badge variant="outline" className="bg-blue-500/10 text-blue-500">
-            Login
-          </Badge>
-        )
-      case "logout":
-        return (
-          <Badge variant="outline" className="bg-gray-500/10 text-gray-500">
-            Logout
-          </Badge>
-        )
-      case "create":
-        return (
-          <Badge variant="outline" className="bg-green-500/10 text-green-500">
-            Create
-          </Badge>
-        )
-      case "update":
-        return (
-          <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500">
-            Update
-          </Badge>
-        )
-      case "delete":
-        return (
-          <Badge variant="outline" className="bg-red-500/10 text-red-500">
-            Delete
-          </Badge>
-        )
-      case "view":
-        return (
-          <Badge variant="outline" className="bg-purple-500/10 text-purple-500">
-            View
-          </Badge>
-        )
-      default:
-        return <Badge variant="outline">{action}</Badge>
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "success":
-        return "text-green-500"
-      case "failure":
-        return "text-red-500"
-      default:
-        return ""
-    }
+  if (user?.role !== 'administrator') {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
+          <p className="text-gray-600">
+            You do not have permission to access this page.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Role & Audit Management</h1>
-          <p className="text-muted-foreground">Manage user roles and review system audit logs</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm">
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
-        </div>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold">User Management</h1>
+        <Dialog open={openDialog} onOpenChange={setOpenDialog}>
+          <DialogTrigger asChild>
+            <Button
+              onClick={() => {
+                setEditingUser(null);
+                setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add User
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-h-screen overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {editingUser ? 'Edit User' : 'Create New User'}
+              </DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="user@example.com"
+                  value={formData.email}
+                  onChange={(e) =>
+                    setFormData({ ...formData, email: e.target.value })
+                  }
+                  disabled={!!editingUser}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="name">Name</Label>
+                <Input
+                  id="name"
+                  placeholder="Full Name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="password">
+                  Password {editingUser && '(leave blank to keep current)'}
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={formData.password}
+                  onChange={(e) =>
+                    setFormData({ ...formData, password: e.target.value })
+                  }
+                  required={!editingUser}
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="role">Role</Label>
+                <Select
+                  value={formData.role}
+                  onValueChange={(value: any) =>
+                    setFormData({ ...formData, role: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="administrator">Administrator</SelectItem>
+                    <SelectItem value="analyst">Analyst</SelectItem>
+                    <SelectItem value="read-only">Read-Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {formData.role !== 'administrator' && (
+                <div className="border-t pt-4">
+                  <Label className="text-base font-semibold mb-3 block">
+                    Assigned Integrations
+                  </Label>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Select which integrations this user can access.
+                  </p>
+                  <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-3">
+                    {integrations.map((integration) => (
+                      <div key={integration.id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`integration-${integration.id}`}
+                          checked={formData.integrationIds.includes(integration.id)}
+                          onCheckedChange={() => toggleIntegration(integration.id)}
+                        />
+                        <label
+                          htmlFor={`integration-${integration.id}`}
+                          className="flex-1 cursor-pointer text-sm"
+                        >
+                          {integration.name}
+                          <span className="text-xs text-gray-500 ml-2">({integration.source})</span>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                  {formData.integrationIds.length === 0 && (
+                    <p className="text-sm text-red-600 mt-2">
+                      At least one integration must be assigned
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-2 justify-end pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCloseDialog}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit">
+                  {editingUser ? 'Update' : 'Create'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
 
-      <Tabs defaultValue="users">
-        <TabsList className="mb-4">
-          <TabsTrigger value="users">User Management</TabsTrigger>
-          <TabsTrigger value="audit">Audit Logs</TabsTrigger>
-        </TabsList>
+      <div className="flex flex-col sm:flex-row gap-4">
+        <Input
+          type="search"
+          placeholder="Search users by name or email..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="flex-1"
+        />
+        <Select value={roleFilter} onValueChange={setRoleFilter}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Filter by role" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Roles</SelectItem>
+            <SelectItem value="administrator">Administrator</SelectItem>
+            <SelectItem value="analyst">Analyst</SelectItem>
+            <SelectItem value="read-only">Read-Only</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
-        <TabsContent value="users">
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-5 w-5" />
-                  User Management
-                </CardTitle>
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button size="sm">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add User
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add New User</DialogTitle>
-                      <DialogDescription>
-                        Create a new user account with appropriate role and permissions.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="name">Full Name</Label>
-                        <Input id="name" placeholder="John Doe" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="email">Email</Label>
-                        <Input id="email" type="email" placeholder="john.doe@example.com" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="role">Role</Label>
-                        <Select defaultValue="analyst">
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select role" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="admin">Admin</SelectItem>
-                            <SelectItem value="analyst">Analyst</SelectItem>
-                            <SelectItem value="operator">Operator</SelectItem>
-                            <SelectItem value="trainee">Trainee</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Switch id="active" defaultChecked />
-                        <Label htmlFor="active">Active Account</Label>
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button type="submit">Create User</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-4 mt-4">
-                <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="search"
-                    placeholder="Search users..."
-                    className="pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <Select value={roleFilter} onValueChange={setRoleFilter}>
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Filter by role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Roles</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                    <SelectItem value="analyst">Analyst</SelectItem>
-                    <SelectItem value="operator">Operator</SelectItem>
-                    <SelectItem value="trainee">Trainee</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Filter by status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardHeader>
-            <CardContent>
+      {loading ? (
+        <div className="flex justify-center items-center h-40">
+          <Loader2 className="w-6 h-6 animate-spin" />
+        </div>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>All Users ({filteredUsers.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-lg border overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>User</TableHead>
+                  <TableRow className="bg-gray-50">
+                    <TableHead>Email</TableHead>
+                    <TableHead>Name</TableHead>
                     <TableHead>Role</TableHead>
+                    <TableHead>Assigned Integrations</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Last Login</TableHead>
+                    <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8">
-                        <Users className="h-12 w-12 text-muted-foreground/50 mx-auto mb-4" />
-                        <h3 className="text-lg font-medium">No users found</h3>
-                        <p className="text-muted-foreground">Try adjusting your search or filters</p>
+                      <TableCell colSpan={7} className="text-center py-8">
+                        No users found
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredUsers.map((user) => (
-                      <TableRow key={user.id}>
+                    filteredUsers.map((u) => (
+                      <TableRow key={u.id}>
+                        <TableCell className="font-medium">{u.email}</TableCell>
+                        <TableCell>{u.name}</TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-3">
-                            <Avatar className="h-8 w-8">
-                              <AvatarImage src={user.avatar || "/placeholder.svg"} />
-                              <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <div className="font-medium">{user.name}</div>
-                              <div className="text-sm text-muted-foreground">{user.email}</div>
-                            </div>
-                          </div>
+                          <span className="px-2 py-1 rounded-full text-sm bg-blue-100 text-blue-800">
+                            {u.role}
+                          </span>
                         </TableCell>
-                        <TableCell>{getRoleBadge(user.role)}</TableCell>
-                        <TableCell>{getStatusBadge(user.status)}</TableCell>
-                        <TableCell>
-                          {user.lastLogin ? (
-                            <div className="text-sm">{new Date(user.lastLogin).toLocaleString()}</div>
+                        <TableCell className="text-sm">
+                          {u.role === 'administrator' ? (
+                            <span className="text-green-600 font-medium">All Integrations</span>
+                          ) : u.assignedIntegrations && u.assignedIntegrations.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {u.assignedIntegrations.map((ai) => (
+                                <span
+                                  key={ai.integrationId}
+                                  className="px-2 py-1 rounded bg-green-100 text-green-800 text-xs"
+                                >
+                                  {ai.integration.name}
+                                </span>
+                              ))}
+                            </div>
                           ) : (
-                            <div className="text-sm text-muted-foreground">Never</div>
+                            <span className="text-gray-500 text-xs">None assigned</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button variant="ghost" size="icon">
-                              <Edit className="h-4 w-4" />
-                              <span className="sr-only">Edit</span>
-                            </Button>
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button variant="ghost" size="icon">
-                                  <Eye className="h-4 w-4" />
-                                  <span className="sr-only">View</span>
-                                </Button>
-                              </DialogTrigger>
-                              <DialogContent>
-                                <DialogHeader>
-                                  <DialogTitle>User Details</DialogTitle>
-                                </DialogHeader>
-                                <div className="space-y-4 py-4">
-                                  <div className="flex justify-center mb-4">
-                                    <Avatar className="h-20 w-20">
-                                      <AvatarImage src={user.avatar || "/placeholder.svg"} />
-                                      <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
-                                    </Avatar>
-                                  </div>
-                                  <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">Name</div>
-                                      <div className="font-medium">{user.name}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">Email</div>
-                                      <div className="font-medium">{user.email}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">Role</div>
-                                      <div>{getRoleBadge(user.role)}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">Status</div>
-                                      <div>{getStatusBadge(user.status)}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">User ID</div>
-                                      <div className="font-mono text-sm">{user.id}</div>
-                                    </div>
-                                    <div>
-                                      <div className="text-sm text-muted-foreground">Last Login</div>
-                                      <div>
-                                        {user.lastLogin ? (
-                                          new Date(user.lastLogin).toLocaleString()
-                                        ) : (
-                                          <span className="text-muted-foreground">Never</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </DialogContent>
-                            </Dialog>
-                          </div>
+                        <TableCell>
+                          <span
+                            className={`px-2 py-1 rounded-full text-sm ${
+                              u.status === 'active'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}
+                          >
+                            {u.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm text-gray-600">
+                          {new Date(u.createdAt).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right space-x-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEdit(u)}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(u.id)}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-        <TabsContent value="audit">{/* Audit Logs Content */}</TabsContent>
-      </Tabs>
+      <Card className="bg-blue-50">
+        <CardHeader>
+          <CardTitle className="text-base">Role Permissions & Integration Access</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div>
+            <strong>Administrator:</strong> Full access to all features, user management, and all integrations
+          </div>
+          <div>
+            <strong>Analyst:</strong> Can view and manage alerts, cases, create tickets. Limited to assigned integrations.
+          </div>
+          <div>
+            <strong>Read-Only:</strong> View only access. Limited to assigned integrations.
+          </div>
+          <div className="text-xs text-gray-600 border-t pt-3">
+            <p className="font-semibold">Integration Assignment Rules:</p>
+            <ul className="list-disc ml-5 mt-2">
+              <li>Administrators have access to all integrations by default</li>
+              <li>Non-administrators must be assigned to at least one integration</li>
+              <li>Users can only view/access data from their assigned integrations</li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
     </div>
-  )
+  );
 }

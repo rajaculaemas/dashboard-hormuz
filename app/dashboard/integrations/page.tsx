@@ -14,6 +14,7 @@ import { IntegrationForm } from "@/components/integration/integration-form"
 import { AgentInstructions } from "@/components/integration/agent-instructions"
 import { useIntegrationStore } from "@/lib/stores/integration-store"
 import type { Integration } from "@/lib/types/integration"
+import { useAuthStore } from "@/lib/stores/auth-store"
 
 export default function IntegrationsPage() {
   const { integrations, loading, error, fetchIntegrations, checkAllIntegrationsStatus } = useIntegrationStore()
@@ -25,6 +26,27 @@ export default function IntegrationsPage() {
   const [selectedIntegration, setSelectedIntegration] = useState<Integration | null>(null)
   const [agentCredentials, setAgentCredentials] = useState({ key: "", secret: "" })
   const [refreshing, setRefreshing] = useState(false)
+  const { user, setUser } = useAuthStore()
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        const data = await res.json()
+        if (data?.user) {
+          setUser(data.user)
+          setIsAdmin(data.user.role === "administrator")
+        } else {
+          setIsAdmin(false)
+        }
+      } catch (err) {
+        console.error("Failed to fetch current user", err)
+        setIsAdmin(false)
+      }
+    }
+    fetchUser()
+  }, [setUser])
 
   useEffect(() => {
     fetchIntegrations()
@@ -95,10 +117,12 @@ export default function IntegrationsPage() {
             <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
             Refresh Status
           </Button>
-          <Button onClick={handleAddIntegration}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Integration
-          </Button>
+          {isAdmin && (
+            <Button onClick={handleAddIntegration}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Integration
+            </Button>
+          )}
         </div>
       </div>
 
@@ -168,7 +192,12 @@ export default function IntegrationsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredIntegrations.map((integration) => (
-              <IntegrationCard key={integration.id} integration={integration} onEdit={handleEditIntegration} />
+              <IntegrationCard
+                key={integration.id}
+                integration={integration}
+                onEdit={handleEditIntegration}
+                canManage={isAdmin}
+              />
             ))}
           </div>
         )}

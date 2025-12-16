@@ -40,9 +40,10 @@ import type { Integration } from "@/lib/types/integration"
 interface IntegrationCardProps {
   integration: Integration
   onEdit: (integration: Integration) => void
+  canManage?: boolean
 }
 
-export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
+export function IntegrationCard({ integration, onEdit, canManage = true }: IntegrationCardProps) {
   const { deleteIntegration, testIntegration } = useIntegrationStore()
   const { syncAlerts } = useAlertStore()
   const [isDeleting, setIsDeleting] = useState(false)
@@ -58,10 +59,8 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
 
   const handleTest = async () => {
     setIsTesting(true)
-    console.log(`Testing integration ${integration.id} (${integration.name})`)
     try {
-      const result = await testIntegration(integration.id)
-      console.log("Test result:", result)
+      await testIntegration(integration.id)
     } catch (error) {
       console.error("Test error:", error)
     } finally {
@@ -72,11 +71,8 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
   const handleSync = async () => {
     setIsSyncing(true)
     setSyncResult(null)
-    console.log(`Syncing alerts for integration ${integration.id} (${integration.name})`)
     try {
       const result = await syncAlerts(integration.id)
-      console.log("Sync result:", result)
-
       setSyncResult({
         success: true,
         message: result?.message || "Sync success",
@@ -84,21 +80,7 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
       })
     } catch (error) {
       console.error("Sync error:", error)
-
-      let message = "Gagal melakukan sync alert"
-
-      if (error instanceof Error) {
-        message = error.message
-      } else if (typeof error === "object" && error !== null && "message" in error) {
-        message = String((error as any).message)
-      } else if (typeof error === "string") {
-        message = error
-      }
-
-      setSyncResult({
-        success: false,
-        message,
-      })
+      setSyncResult({ success: false, message: error instanceof Error ? error.message : "Sync failed" })
     } finally {
       setIsSyncing(false)
     }
@@ -160,7 +142,6 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
     }
   }
 
-  // Safe method access with fallback
   const safeMethod = integration.method || "api"
 
   return (
@@ -186,60 +167,62 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
                 <CardDescription>{integration.source}</CardDescription>
               </div>
             </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="h-4 w-4" />
-                  <span className="sr-only">Open menu</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => onEdit(integration)}>
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleTest}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Test Connection
-                </DropdownMenuItem>
-                {integration.source === "stellar-cyber" && (
-                  <DropdownMenuItem onClick={handleSync}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Sync Alerts
+            {canManage && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon">
+                    <MoreVertical className="h-4 w-4" />
+                    <span className="sr-only">Open menu</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => onEdit(integration)}>
+                    <Edit className="h-4 w-4 mr-2" />
+                    Edit
                   </DropdownMenuItem>
-                )}
-                <DropdownMenuItem>
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  View Documentation
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <DropdownMenuItem className="text-red-500" onSelect={(e) => e.preventDefault()}>
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete
+                  <DropdownMenuItem onClick={handleTest}>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Test Connection
+                  </DropdownMenuItem>
+                  {integration.source === "stellar-cyber" && (
+                    <DropdownMenuItem onClick={handleSync}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Sync Alerts
                     </DropdownMenuItem>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Delete Integration</DialogTitle>
-                      <DialogDescription>
-                        Are you sure you want to delete the {integration.name} integration? This action cannot be
-                        undone.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => document.body.click()}>
-                        Cancel
-                      </Button>
-                      <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
-                        {isDeleting ? "Deleting..." : "Delete"}
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  )}
+                  <DropdownMenuItem>
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View Documentation
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <DropdownMenuItem className="text-red-500" onSelect={(e) => e.preventDefault()}>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Delete Integration</DialogTitle>
+                        <DialogDescription>
+                          Are you sure you want to delete the {integration.name} integration? This action cannot be
+                          undone.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => document.body.click()}>
+                          Cancel
+                        </Button>
+                        <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
           <div className="flex flex-wrap gap-2 mt-2">
             <Badge variant="outline" className={getTypeColor()}>
@@ -272,23 +255,25 @@ export function IntegrationCard({ integration, onEdit }: IntegrationCardProps) {
             </div>
           )}
         </CardContent>
-        <CardFooter className="flex justify-between pt-2">
-          <Button variant="outline" size="sm" onClick={() => onEdit(integration)}>
-            <Edit className="h-4 w-4 mr-2" />
-            Edit
-          </Button>
-          {integration.source === "stellar-cyber" ? (
-            <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing}>
-              <Download className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
-              {isSyncing ? "Syncing..." : "Sync Alerts"}
+        {canManage && (
+          <CardFooter className="flex justify-between pt-2">
+            <Button variant="outline" size="sm" onClick={() => onEdit(integration)}>
+              <Edit className="h-4 w-4 mr-2" />
+              Edit
             </Button>
-          ) : (
-            <Button variant="outline" size="sm" onClick={handleTest} disabled={isTesting}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${isTesting ? "animate-spin" : ""}`} />
-              {isTesting ? "Testing..." : "Test Connection"}
-            </Button>
-          )}
-        </CardFooter>
+            {integration.source === "stellar-cyber" ? (
+              <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing}>
+                <Download className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
+                {isSyncing ? "Syncing..." : "Sync Alerts"}
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={handleTest} disabled={isTesting}>
+                <RefreshCw className={`h-4 w-4 mr-2 ${isTesting ? "animate-spin" : ""}`} />
+                {isTesting ? "Testing..." : "Test Connection"}
+              </Button>
+            )}
+          </CardFooter>
+        )}
       </Card>
     </motion.div>
   )

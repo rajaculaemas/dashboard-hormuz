@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
-import { getCases } from "@/lib/api/stellar-cyber-case"
+import { getCases, getCaseAlerts } from "@/lib/api/stellar-cyber-case"
+import { getAssigneeName } from "@/lib/utils"
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,19 +38,72 @@ export async function POST(request: NextRequest) {
 
     console.log("Found integration:", integration.name)
 
-    // Fetch cases from Stellar Cyber
-    console.log("Fetching cases from Stellar Cyber...")
-    const stellarCases = await getCases({
-      integrationId,
-      limit: 1000,
-    })
+    let stellarCases: any[] = []
+
+    if (integration.source === "stellar-cyber") {
+      // Fetch cases from Stellar Cyber
+      console.log("Fetching cases from Stellar Cyber...")
+      const casesResponse = await getCases({
+        integrationId,
+        limit: 1000,
+      })
+      stellarCases = casesResponse.data?.cases || casesResponse || []
+    } else if (integration.source === "qradar") {
+      // For QRadar, pull local QRadar tickets stored in DB (created via Follow Up)
+      console.log("Fetching cases from QRadar tickets stored in DB...")
+      const tickets = await prisma.qRadarTicket.findMany({
+        include: { qradarOffense: true },
+      })
+      // Filter tickets to this integration and only include offenses in FOLLOW_UP status
+      const filtered = tickets.filter(
+        (t) => t.qradarOffense?.integrationId === integrationId && t.qradarOffense?.status === "FOLLOW_UP",
+      )
+
+      // Map to a case-like structure used by the sync logic
+      stellarCases = filtered.map((t) => ({
+        // Use the offense external id as the primary external identifier (string)
+        _id: String(t.qradarOffense?.externalId || t.offenseId || t.id),
+        // Keep ticket_id empty to avoid large numeric conversions
+        ticket_id: null,
+        // Use the original offense title as the case name
+        name: t.qradarOffense?.title || `Offense ${t.qradarOffense?.externalId || t.offenseId}`,
+        // Mirror the offense status/severity
+        status: t.qradarOffense?.status || "OPEN",
+        severity: String(t.qradarOffense?.severity || "Medium"),
+        assignee: null,
+        assignee_name: null,
+        created_at: t.qradarOffense?.startTime ? new Date(t.qradarOffense.startTime).toISOString() : t.createdAt?.toISOString(),
+        modified_at: t.qradarOffense?.lastUpdatedTime
+          ? new Date(t.qradarOffense.lastUpdatedTime).toISOString()
+          : t.updatedAt?.toISOString(),
+        description: t.qradarOffense?.description || t.description || "",
+        version: 1,
+        // preserve original ticket object for metadata
+        _raw: t,
+      }))
+    } else {
+      // Unsupported integration for case sync; return empty list
+      console.log(`Integration source ${integration.source} not supported for case sync`)
+      stellarCases = []
+    }
 
     console.log(`Retrieved ${stellarCases.length} cases from Stellar Cyber`)
 
+    // Filter out "Empty Case" cases
+    const filteredCases = stellarCases.filter((c) => {
+      const isEmptyCase = c.name && c.name.includes("Empty Case (All Alerts Ignored or Closed)")
+      if (isEmptyCase) {
+        console.log(`Filtering out case: ${c._id} - ${c.name}`)
+      }
+      return !isEmptyCase
+    })
+
+    console.log(`After filtering: ${filteredCases.length} cases remaining`)
+
     // Log some sample cases to see their status
-    if (stellarCases.length > 0) {
+    if (filteredCases.length > 0) {
       console.log("Sample cases from Stellar Cyber:")
-      stellarCases.slice(0, 3).forEach((c, i) => {
+      filteredCases.slice(0, 3).forEach((c, i) => {
         console.log(`  ${i + 1}. ${c._id} - ${c.name} - Status: ${c.status} - Modified: ${c.modified_at}`)
       })
     }
@@ -59,8 +113,55 @@ export async function POST(request: NextRequest) {
     let errorCount = 0
     const skippedCount = 0
 
+    // Helper function to link alerts to a case by searching for alerts that reference this case externalId
+    async function linkAlertsToCase(caseDbId: string, caseExternalId: string, integrationId: string) {
+      try {
+        // Find all alerts from this integration that mention this case in their metadata or description
+        const relatedAlerts = await prisma.alert.findMany({
+          where: {
+            integrationId: integrationId,
+            OR: [
+              // Match case external ID in metadata
+              { metadata: { path: ["stellar_cyber", "case_id"], equals: caseExternalId } },
+              { metadata: { path: ["caseId"], equals: caseExternalId } },
+              // Match in description or title
+              { description: { contains: caseExternalId } },
+              { title: { contains: caseExternalId } },
+            ],
+          },
+          select: { id: true },
+        })
+
+        if (relatedAlerts.length > 0) {
+          // Create relationships between case and alerts
+          for (const alert of relatedAlerts) {
+            try {
+              await prisma.caseAlert.upsert({
+                where: {
+                  caseId_alertId: {
+                    caseId: caseDbId,
+                    alertId: alert.id,
+                  },
+                },
+                update: {},
+                create: {
+                  caseId: caseDbId,
+                  alertId: alert.id,
+                },
+              })
+            } catch (linkErr) {
+              console.log(`Could not link alert ${alert.id} to case ${caseDbId}:`, linkErr instanceof Error ? linkErr.message : "Unknown error")
+            }
+          }
+          console.log(`Linked ${relatedAlerts.length} alerts to case ${caseExternalId}`)
+        }
+      } catch (err) {
+        console.log(`Error linking alerts to case ${caseExternalId}:`, err instanceof Error ? err.message : "Unknown error")
+      }
+    }
+
     // Process each case
-    for (const stellarCase of stellarCases) {
+    for (const stellarCase of filteredCases) {
       try {
         console.log(`\n--- Processing case: ${stellarCase._id} ---`)
         console.log(`Name: ${stellarCase.name}`)
@@ -68,12 +169,26 @@ export async function POST(request: NextRequest) {
         console.log(`Assignee from Stellar: ${stellarCase.assignee} (${stellarCase.assignee_name})`)
         console.log(`Modified at: ${stellarCase.modified_at}`)
 
+        // Normalize ticket id: Prisma expects an integer for ticketId.
+        let ticketNumeric: number | null = null
+        if (stellarCase.ticket_id !== undefined && stellarCase.ticket_id !== null) {
+          const extracted = String(stellarCase.ticket_id).replace(/\D/g, "")
+          const parsed = extracted ? Number(extracted) : NaN
+          // Prisma Int is 32-bit signed. If the parsed number is too large, ignore it to avoid connector errors.
+          const INT32_MAX = 2147483647
+          if (!isNaN(parsed) && parsed <= INT32_MAX) {
+            ticketNumeric = parsed
+          } else if (!isNaN(parsed) && parsed > INT32_MAX) {
+            console.log(`Ticket id numeric value ${parsed} exceeds INT32_MAX, will not use ticketId filter`) 
+          }
+        }
+
         // Check if case already exists
-        const existingCase = await prisma.case.findFirst({
-          where: {
-            OR: [{ externalId: stellarCase._id }, { ticketId: stellarCase.ticket_id }],
-          },
-        })
+        const whereClause: any = ticketNumeric
+          ? { OR: [{ externalId: stellarCase._id }, { ticketId: ticketNumeric }] }
+          : { externalId: stellarCase._id }
+
+        const existingCase = await prisma.case.findFirst({ where: whereClause })
 
         if (existingCase) {
           console.log(`Found existing case in DB:`)
@@ -85,12 +200,16 @@ export async function POST(request: NextRequest) {
         // Prepare case data with all fields that might change
         const caseData = {
           externalId: stellarCase._id,
-          ticketId: stellarCase.ticket_id || 0,
+          ticketId: ticketNumeric || 0,
           name: stellarCase.name || "Unnamed Case",
-          status: stellarCase.status || "New",
+          status: stellarCase.status || (integration.source === "qradar" ? "OPEN" : "New"),
           severity: stellarCase.severity || "Medium",
           assignee: stellarCase.assignee || null,
-          assigneeName: stellarCase.assignee_name || null,
+          // Use assignee_name from Stellar Cyber if available and valid
+          assigneeName:
+            stellarCase.assignee_name && stellarCase.assignee_name && stellarCase.assignee_name.trim() && stellarCase.assignee_name !== "Unassigned"
+              ? stellarCase.assignee_name
+              : null,
           description: stellarCase.description || stellarCase.name || "No description",
           createdAt: stellarCase.created_at ? new Date(stellarCase.created_at) : new Date(),
           modifiedAt: stellarCase.modified_at ? new Date(stellarCase.modified_at) : new Date(),
@@ -110,6 +229,57 @@ export async function POST(request: NextRequest) {
           tenantName: stellarCase.tenant_name || null,
           metadata: stellarCase,
           integrationId: integrationId,
+        }
+
+        // For Stellar Cyber cases, fetch alerts to get latest alert_time for MTTR calculation
+        if (integration.source === "stellar-cyber") {
+          try {
+            const alerts = await getCaseAlerts({
+              caseId: stellarCase._id,
+              integrationId,
+            })
+
+            if (alerts && alerts.length > 0) {
+              console.log(`Fetched ${alerts.length} alerts for case ${stellarCase._id}`)
+              
+              // Find the latest alert_time (timestamp)
+              const alertTimes = alerts
+                .map((alert: any, idx: number) => {
+                  const time = alert.alert_time
+                  console.log(`Alert ${idx} alert_time:`, time, typeof time)
+                  
+                  // Handle different formats: milliseconds (number), ISO string, etc
+                  let ms = 0
+                  if (typeof time === "number") {
+                    // Assume it's already in milliseconds if > 1000000000000 (year 2001 in ms)
+                    // Otherwise assume it's in seconds
+                    ms = time > 1000000000000 ? time : time * 1000
+                  } else if (typeof time === "string") {
+                    ms = new Date(time).getTime()
+                  }
+                  
+                  console.log(`Alert ${idx} converted to ms:`, ms)
+                  return ms
+                })
+                .filter((t: number) => t > 0 && !isNaN(t))
+
+              if (alertTimes.length > 0) {
+                const latestAlertTime = Math.max(...alertTimes)
+                console.log(`Latest alert time from ${alertTimes.length} alerts:`, latestAlertTime, new Date(latestAlertTime))
+                
+                // Store latest alert time in metadata for MTTR calculation
+                caseData.metadata = {
+                  ...caseData.metadata,
+                  latest_alert_time: latestAlertTime,
+                  alerts_count: alerts.length,
+                  alert_times_debug: alertTimes.slice(0, 3), // Store first 3 for debugging
+                }
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching alerts for case ${stellarCase._id}:`, error)
+            // Continue with case sync even if alert fetch fails
+          }
         }
 
         if (existingCase) {
@@ -165,6 +335,11 @@ export async function POST(request: NextRequest) {
           console.log(`? Updated case: ${stellarCase._id}`)
           console.log(`  New status in DB: ${updatedCase.status}`)
           console.log(`  New assignee in DB: ${updatedCase.assignee}`)
+
+          // Link related alerts to this case (for Stellar Cyber cases)
+          if (integration.source === "stellar-cyber") {
+            await linkAlertsToCase(existingCase.id, stellarCase._id, integrationId)
+          }
         } else {
           // Create new case
           console.log(`Creating new case: ${stellarCase._id}`)
@@ -173,6 +348,11 @@ export async function POST(request: NextRequest) {
           })
           syncedCount++
           console.log(`? Created new case: ${stellarCase._id} with status: ${newCase.status}`)
+
+          // Link related alerts to this case (for Stellar Cyber cases)
+          if (integration.source === "stellar-cyber") {
+            await linkAlertsToCase(newCase.id, stellarCase._id, integrationId)
+          }
         }
       } catch (caseError) {
         console.error(`? Error processing case ${stellarCase._id}:`, caseError)

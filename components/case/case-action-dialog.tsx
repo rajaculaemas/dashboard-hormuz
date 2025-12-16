@@ -32,7 +32,7 @@ interface CaseUpdate {
   comment?: string
 }
 
-const ASSIGNEES = [
+export const ASSIGNEES = [
   { id: "unassigned", name: "Unassigned" },
   { id: "abimantara", name: "Abdi Bimantara" },
   { id: "ahafiz", name: "Habib" },
@@ -54,6 +54,17 @@ const ASSIGNEES = [
   { id: "shizbullah", name: "Said Bajaj Bajuri" },
 ]
 
+// When dealing with QRadar integrations, only a small set of usernames
+// are valid on the QRadar side. Use these ids when updating QRadar offenses.
+export const QRADAR_ASSIGNEES = [
+  { id: "unassigned", name: "Unassigned" },
+  { id: "admin", name: "Administrator" },
+  { id: "sakti", name: "Sakti" },
+  { id: "soc_analyst", name: "SOC Analyst" },
+  { id: "soc247", name: "SOC247" },
+  { id: "socntt", name: "SOCNTT" },
+]
+
 const STATUSES = [
   { value: "Open", label: "Open", color: "destructive" },
   { value: "In Progress", label: "In Progress", color: "default" },
@@ -73,13 +84,65 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
   const [updates, setUpdates] = useState<CaseUpdate>({})
   const [comment, setComment] = useState("")
   const [loading, setLoading] = useState(false)
+  const [closingReasons, setClosingReasons] = useState<Array<{ id: number; text: string }>>([])
+  const [selectedClosingReason, setSelectedClosingReason] = useState<number | null>(null)
+  const [appUsers, setAppUsers] = useState<Array<{ id: string; name: string }>>([])
   const { toast } = useToast()
 
   useEffect(() => {
     if (open && caseData) {
+      console.log("[CaseActionDialog] Received caseData:", caseData)
+      console.log("[CaseActionDialog] Integration source:", caseData.integration?.source)
       // Reset form when dialog opens
       setUpdates({})
       setComment("")
+      setSelectedClosingReason(null)
+
+      // If this is a Wazuh ticket, fetch app users
+      if (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh")) {
+        console.log("[CaseActionDialog] Wazuh case detected, fetching app users")
+        ;(async () => {
+          try {
+            const resp = await fetch("/api/users")
+            const data = await resp.json()
+            console.log("[CaseActionDialog] App users response:", data)
+            if (data.success && Array.isArray(data.users)) {
+              setAppUsers(data.users)
+            } else if (Array.isArray(data)) {
+              setAppUsers(data)
+            }
+          } catch (err) {
+            console.error("[CaseActionDialog] Failed to fetch app users:", err)
+          }
+        })()
+      } else if (caseData.integration?.source === "qradar") {
+        console.log("[CaseActionDialog] QRadar case detected, fetching closing reasons")
+        console.log("[CaseActionDialog] caseData.integrationId:", caseData.integrationId)
+        console.log("[CaseActionDialog] caseData.integration?.id:", caseData.integration?.id)
+        ;(async () => {
+          try {
+            const integId = caseData.integrationId || caseData.integration?.id
+            if (!integId) {
+              console.error("[CaseActionDialog] No integration ID found!")
+              return
+            }
+            const url = `/api/qradar/closing-reasons?integrationId=${integId}`
+            console.log("[CaseActionDialog] Fetching from URL:", url)
+            const resp = await fetch(url)
+            console.log("[CaseActionDialog] Response status:", resp.status)
+            const data = await resp.json()
+            console.log("[CaseActionDialog] Closing reasons response:", data)
+            if (data.success) {
+              setClosingReasons(data.reasons || [])
+              console.log("[CaseActionDialog] Loaded closing reasons:", data.reasons)
+            } else {
+              console.error("[CaseActionDialog] Failed to fetch closing reasons:", data.error)
+            }
+          } catch (err) {
+            console.error("[CaseActionDialog] Failed to fetch QRadar closing reasons:", err)
+          }
+        })()
+      }
     }
   }, [open, caseData])
 
@@ -98,43 +161,96 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
       return
     }
 
+    // For QRadar Closed status, closing reason is REQUIRED
+    if (caseData.integration?.source === "qradar" && updates.status === "Closed" && !selectedClosingReason) {
+      toast({
+        title: "Closing Reason Required",
+        description: "Please select a closing reason before closing the offense.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setLoading(true)
 
     try {
-      const updateData = {
+      const updateData: any = {
         ...updates,
         comment: comment.trim() || undefined,
       }
 
-      const response = await fetch(`/api/cases/${caseData.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(updateData),
-      })
+      // Include integration source info for backend routing
+      console.log("[handleUpdate] caseData.integration:", caseData.integration)
+      console.log("[handleUpdate] caseData.integration?.source:", caseData.integration?.source)
+      
+      if (caseData.integration?.source) {
+        updateData.integrationSource = caseData.integration.source
+        console.log("[handleUpdate] Added integrationSource:", updateData.integrationSource)
+      }
 
-      const data = await response.json()
+      if (caseData.integration?.source === "qradar" && updates.status === "Closed" && selectedClosingReason) {
+        updateData.closingReasonId = selectedClosingReason
+      }
 
-      if (data.success) {
-        toast({
-          title: "Case Updated",
-          description: "The case has been successfully updated.",
+      let response
+      let data
+
+      if (caseData.integration?.source === "qradar") {
+        // For QRadar, update the underlying alert via the alerts PATCH endpoint
+        const body: any = {
+          status: updates.status || caseData.status,
+          comments: updateData.comment,
+          isQRadar: true,
+        }
+
+        if (updates.assignee) {
+          body.assignedTo = updates.assignee
+        }
+
+        if (updates.status === "Closed" && selectedClosingReason) {
+          body.closingReasonId = selectedClosingReason
+        }
+
+        response = await fetch(`/api/alerts/${caseData.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
         })
-        onUpdate()
-        onOpenChange(false)
+
+        data = await response.json()
+
+        if (data.success) {
+          toast({ title: "Alert Updated", description: "The QRadar alert was updated." })
+          onUpdate()
+          onOpenChange(false)
+        } else {
+          toast({ title: "Update Failed", description: data.error || "Failed to update alert", variant: "destructive" })
+        }
       } else {
-        toast({
-          title: "Update Failed",
-          description: data.error || "Failed to update case",
-          variant: "destructive",
+        response = await fetch(`/api/cases/${caseData.id}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(updateData),
         })
+
+        data = await response.json()
+
+        if (data.success) {
+          toast({ title: "Case Updated", description: "The case has been successfully updated." })
+          onUpdate()
+          onOpenChange(false)
+        } else {
+          toast({ title: "Update Failed", description: data.error || "Failed to update case", variant: "destructive" })
+        }
       }
     } catch (error) {
       console.error("Error updating case:", error)
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace")
       toast({
         title: "Update Failed",
-        description: "An error occurred while updating the case",
+        description: error instanceof Error ? error.message : "An error occurred while updating the case",
         variant: "destructive",
       })
     } finally {
@@ -195,19 +311,21 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
               <CardTitle className="text-lg">Current Case Information</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid grid-cols-3 gap-4">
+              <div className={`grid gap-4 ${caseData.integration?.source === "qradar" ? "grid-cols-2" : "grid-cols-3"}`}>
                 <div>
                   <Label className="text-sm font-medium text-muted-foreground">Status</Label>
                   <Badge variant={getStatusColor(caseData.status)} className="mt-1">
                     {caseData.status}
                   </Badge>
                 </div>
-                <div>
-                  <Label className="text-sm font-medium text-muted-foreground">Severity</Label>
-                  <Badge variant={getSeverityColor(caseData.severity)} className="mt-1">
-                    {caseData.severity}
-                  </Badge>
-                </div>
+                {caseData.integration?.source !== "qradar" && (
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Severity</Label>
+                    <Badge variant={getSeverityColor(caseData.severity)} className="mt-1">
+                      {caseData.severity}
+                    </Badge>
+                  </div>
+                )}
                 <div>
                   <Label className="text-sm font-medium text-muted-foreground">Assignee</Label>
                   <div className="flex items-center gap-2 mt-1">
@@ -225,7 +343,7 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
 
           {/* Update Form */}
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
+            <div className={`grid gap-4 ${caseData.integration?.source === "qradar" ? "grid-cols-2" : "grid-cols-3"}`}>
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
@@ -236,7 +354,7 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    {STATUSES.map((status) => (
+                    {(caseData.integration?.source === "qradar" ? [{ value: "Closed", label: "Closed" }] : STATUSES).map((status) => (
                       <SelectItem key={status.value} value={status.value}>
                         {status.label}
                       </SelectItem>
@@ -245,24 +363,26 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="severity">Severity</Label>
-                <Select
-                  value={updates.severity || ""}
-                  onValueChange={(value) => setUpdates({ ...updates, severity: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select severity" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SEVERITIES.map((severity) => (
-                      <SelectItem key={severity.value} value={severity.value}>
-                        {severity.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {caseData.integration?.source !== "qradar" && (
+                <div className="space-y-2">
+                  <Label htmlFor="severity">Severity</Label>
+                  <Select
+                    value={updates.severity || ""}
+                    onValueChange={(value) => setUpdates({ ...updates, severity: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select severity" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SEVERITIES.map((severity) => (
+                        <SelectItem key={severity.value} value={severity.value}>
+                          {severity.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="assignee">Assignee</Label>
@@ -274,7 +394,12 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                     <SelectValue placeholder="Select assignee" />
                   </SelectTrigger>
                   <SelectContent>
-                    {ASSIGNEES.map((assignee) => (
+                    {(
+                      caseData.integration?.source === "qradar" ? QRADAR_ASSIGNEES : 
+                      (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh")) && appUsers.length > 0
+                        ? appUsers
+                        : ASSIGNEES
+                    ).map((assignee) => (
                       <SelectItem key={assignee.id} value={assignee.id}>
                         {assignee.name}
                       </SelectItem>
@@ -294,6 +419,24 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                 rows={3}
               />
             </div>
+
+            {caseData.integration?.source === "qradar" && updates.status === "Closed" && (
+              <div className="space-y-2">
+                <Label htmlFor="closingReason">Closing Reason</Label>
+                <Select value={selectedClosingReason?.toString() || ""} onValueChange={(v) => setSelectedClosingReason(Number(v))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select closing reason" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {closingReasons.map((r) => (
+                      <SelectItem key={r.id} value={r.id.toString()}>
+                        ID: {r.id} - {r.text}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
           {/* Changes Summary */}

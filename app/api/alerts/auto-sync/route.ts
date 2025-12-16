@@ -3,19 +3,21 @@ import prisma from "@/lib/prisma"
 
 export async function POST() {
   try {
-    console.log("Starting auto-sync for all active Stellar Cyber integrations")
+    console.log("Starting auto-sync for all active integrations (Stellar Cyber, QRadar, and Wazuh)")
 
-    // Get all active Stellar Cyber integrations
+    // Get all active integrations (Stellar Cyber, QRadar, and Wazuh)
     const integrations = await prisma.integration.findMany({
       where: {
-        source: "stellar-cyber",
+        source: {
+          in: ["stellar-cyber", "qradar", "wazuh"],
+        },
         status: "connected",
       },
     })
 
     if (integrations.length === 0) {
       return NextResponse.json({
-        message: "No active Stellar Cyber integrations found",
+        message: "No active integrations found",
         synced: 0,
       })
     }
@@ -28,33 +30,62 @@ export async function POST() {
         console.log(`Auto-syncing integration: ${integration.name} (${integration.id})`)
 
         // Call the sync endpoint for this integration
-        const syncResponse = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/api/alerts/sync`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              integrationId: integration.id,
-            }),
-          },
-        )
+        // Note: NEXT_PUBLIC_API_URL already includes /api, so we just add the endpoint path
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api"
+        
+        // Use specific endpoint for Wazuh
+        const syncPath = integration.source === "wazuh" ? "/alerts/wazuh/sync" : "/alerts/sync"
+        const syncUrl = `${apiUrl}${syncPath}`
+        
+        console.log(`Syncing from URL: ${syncUrl}`)
 
-        const syncResult = await syncResponse.json()
+        const syncResponse = await fetch(syncUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            integrationId: integration.id,
+          }),
+        })
+
+        // Check response status and content type
+        const contentType = syncResponse.headers.get("content-type")
+        let syncResult: any = {}
+        
+        if (contentType && contentType.includes("application/json")) {
+          syncResult = await syncResponse.json()
+        } else {
+          // Response is not JSON (likely HTML error page)
+          const text = await syncResponse.text()
+          console.error(`Invalid response from sync endpoint: ${text.substring(0, 200)}`)
+          syncResult = {
+            error: `Invalid response from sync endpoint (Status: ${syncResponse.status})`,
+          }
+        }
+
+        // Extract stats from response (could be in different formats)
+        const stats = syncResult.stats || {
+          total: syncResult.total || syncResult.count || 0,
+          synced: syncResult.synced || syncResult.count || 0,
+          updated: syncResult.updated || 0,
+          errors: syncResult.errors || 0,
+        }
 
         syncResults.push({
           integrationId: integration.id,
           integrationName: integration.name,
-          success: syncResponse.ok,
-          stats: syncResult.stats || null,
-          error: syncResponse.ok ? null : syncResult.error,
+          source: integration.source,
+          success: syncResponse.ok && contentType?.includes("application/json"),
+          stats: syncResponse.ok ? stats : null,
+          error: syncResponse.ok ? null : syncResult.error || "Sync failed",
         })
       } catch (error) {
         console.error(`Error auto-syncing integration ${integration.id}:`, error)
         syncResults.push({
           integrationId: integration.id,
           integrationName: integration.name,
+          source: integration.source,
           success: false,
           stats: null,
           error: error instanceof Error ? error.message : "Unknown error",

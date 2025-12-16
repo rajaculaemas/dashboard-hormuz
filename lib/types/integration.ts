@@ -5,6 +5,8 @@ export type IntegrationSource =
   | "firewall"
   | "edr"
   | "antivirus"
+  | "qradar"
+  | "wazuh"
   | "waf"
   | "endpoint"
   | "siem"

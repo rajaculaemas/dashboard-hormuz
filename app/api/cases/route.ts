@@ -2,26 +2,54 @@ import { type NextRequest, NextResponse } from "next/server"
 
 export const dynamic = 'force-dynamic'
 import prisma from "@/lib/prisma"
+import { getCurrentUser } from "@/lib/auth/session"
+import { getUserAccessibleIntegrations } from "@/lib/auth/password"
 
 export async function GET(request: NextRequest) {
   try {
+    const currentUser = await getCurrentUser()
+    if (!currentUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const integrationId = searchParams.get("integrationId")
     const timeRange = searchParams.get("time_range") || "7d"
+    const fromDate = searchParams.get("from_date")
+    const toDate = searchParams.get("to_date")
     const status = searchParams.get("status")
     const severity = searchParams.get("severity")
 
     console.log("=== FETCHING CASES ===")
+    console.log("User ID:", currentUser.userId)
     console.log("Integration ID:", integrationId)
     console.log("Time Range:", timeRange)
-    console.log("Status Filter:", status)
-    console.log("Severity Filter:", severity)
+
+    // Get user's accessible integrations
+    const accessibleIntegrations = await getUserAccessibleIntegrations(currentUser.userId)
+    console.log("Accessible integrations for user:", accessibleIntegrations)
+
+    // Build integration filter
+    let integrationFilter: any
+    if (integrationId) {
+      // User requested specific integration - check if they have access
+      if (!accessibleIntegrations.includes(integrationId)) {
+        return NextResponse.json(
+          { error: 'You do not have access to this integration' },
+          { status: 403 }
+        )
+      }
+      integrationFilter = integrationId
+    } else {
+      // No specific integration selected - filter by accessible ones
+      integrationFilter = { in: accessibleIntegrations }
+    }
+
+    console.log("Integration filter:", integrationFilter)
 
     // Build where clause
-    const where: any = {}
-
-    if (integrationId) {
-      where.integrationId = integrationId
+    const where: any = {
+      integrationId: integrationFilter,
     }
 
     if (status && status !== "all") {
@@ -32,11 +60,38 @@ export async function GET(request: NextRequest) {
       where.severity = severity
     }
 
-    // Add time range filter - FIXED: Use proper date calculation
-    if (timeRange !== "all") {
-      const now = new Date()
-      let startDate: Date
+    // Add time range filter
+    const now = new Date()
+    let startDate: Date
+    let endDate: Date = now
 
+    // If absolute date range provided, use it
+    if (fromDate && toDate) {
+      // Parse YYYY-MM-DD format as UTC+7 local date
+      // fromDate is like "2025-12-10" which should be Dec 10 00:00 UTC+7
+      // We need to convert this to UTC for database query
+      
+      // Parse as UTC first
+      const fromUTC = new Date(fromDate + 'T00:00:00Z')
+      const toUTC = new Date(toDate + 'T00:00:00Z')
+      
+      // Adjust by UTC+7 offset (subtract 7 hours to get back to UTC)
+      // UTC+7 means local time is 7 hours ahead, so to convert local to UTC we subtract 7 hours
+      const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
+      startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+      endDate = new Date(toUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+      
+      // Set end date to end of day (23:59:59.999) in UTC to include all cases on that calendar day
+      endDate.setUTCHours(23, 59, 59, 999)
+      
+      console.log("Using absolute date range (UTC+7):", {
+        rawFromDate: fromDate,
+        rawToDate: toDate,
+        startDateUTC: startDate.toISOString(),
+        endDateUTC: endDate.toISOString(),
+      })
+    } else if (timeRange !== "all") {
+      // Otherwise use relative time range
       switch (timeRange) {
         case "1h":
           startDate = new Date(now.getTime() - 1 * 60 * 60 * 1000) // 1 hour ago
@@ -59,38 +114,146 @@ export async function GET(request: NextRequest) {
         default:
           startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) // Default 7 days
       }
+    } else {
+      // "all" time range
+      startDate = new Date("2000-01-01")
+    }
 
+    if (timeRange !== "all" || (fromDate && toDate)) {
       where.createdAt = {
         gte: startDate,
-        lte: now,
+        lte: endDate,
       }
 
       console.log("Time filter applied:", {
-        timeRange,
         startDate: startDate.toISOString(),
-        endDate: now.toISOString(),
+        endDate: endDate.toISOString(),
       })
     }
 
     console.log("Where clause:", JSON.stringify(where, null, 2))
 
-    // Fetch cases with correct field names
-    const cases = await prisma.case.findMany({
-      where,
-      include: {
-        integration: {
-          select: {
-            id: true,
-            name: true,
+    // For QRadar integrations, fetch QRadarOffenses with status FOLLOW_UP instead of Case table
+    let cases: any[] = []
+
+    if (integrationId) {
+      const integration = await prisma.integration.findUnique({
+        where: { id: integrationId },
+      })
+
+      if (integration?.source === "qradar") {
+        // Return alerts (from the alerts table) that represent QRadar follow-up.
+        // We treat alerts with status "In Progress", "Closed", OR metadata.qradar.follow_up === true as QRadar cases.
+        const alertWhere: any = {
+          integrationId,
+          OR: [
+            { status: "In Progress" },
+            { status: "Closed" },
+            { metadata: { path: ["qradar", "follow_up"], equals: true } },
+          ],
+        }
+
+        // Apply time filter if present (where.createdAt was built earlier)
+        if (where.createdAt) {
+          alertWhere.timestamp = where.createdAt
+        }
+
+        if (severity && severity !== "all") {
+          alertWhere.severity = severity
+        }
+
+        const alerts = await prisma.alert.findMany({
+          where: alertWhere,
+          include: {
+            integration: {
+              select: { id: true, name: true, source: true },
+            },
+          },
+          orderBy: { timestamp: "desc" },
+        })
+
+        // Map alerts to case-like structure
+        cases = alerts.map((a) => ({
+          id: a.id,
+          externalId: a.externalId || a.id,
+          ticketId: null,
+          name: a.title,
+          description: a.description,
+          status: a.status,
+          severity: a.severity,
+          assignee: a.metadata?.assignee || a.metadata?.qradar?.assigned_to || null,
+          assigneeName: a.metadata?.assignee || a.metadata?.qradar?.assigned_to || null,
+          createdAt: a.timestamp || new Date(),
+          updatedAt: a.updatedAt || a.timestamp || new Date(),
+          acknowledgedAt: null,
+          integrationId: a.integrationId,
+          integration: a.integration,
+          metadata: a.metadata,
+        }))
+
+        console.log(`Found ${cases.length} QRadar alerts with status In Progress`)
+      } else {
+        // Fetch Stellar Cyber cases from Case table
+        cases = await prisma.case.findMany({
+          where,
+          include: {
+            integration: {
+              select: {
+                id: true,
+                name: true,
+                source: true,
+              },
+            },
+            relatedAlerts: {
+              include: {
+                alert: {
+                  select: {
+                    id: true,
+                    timestamp: true,
+                    metadata: true,
+                  },
+                },
+              },
+            },
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+        })
+
+        console.log(`Found ${cases.length} Stellar Cyber cases in database`)
+      }
+    } else {
+      // No integration selected, fetch from Case table
+      cases = await prisma.case.findMany({
+        where,
+        include: {
+          integration: {
+            select: {
+              id: true,
+              name: true,
+              source: true,
+            },
+          },
+          relatedAlerts: {
+            include: {
+              alert: {
+                select: {
+                  id: true,
+                  timestamp: true,
+                  metadata: true,
+                },
+              },
+            },
           },
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    })
+        orderBy: {
+          createdAt: "desc",
+        },
+      })
 
-    console.log(`Found ${cases.length} cases in database`)
+      console.log(`Found ${cases.length} cases in database`)
+    }
 
     // Log some sample cases for debugging
     if (cases.length > 0) {
@@ -103,9 +266,17 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Transform cases to include computed fields
+    // Transform cases to include computed fields and flatten alerts
     const transformedCases = cases.map((caseItem) => ({
       ...caseItem,
+      // Flatten relatedAlerts to alerts array for frontend compatibility
+      alerts: (caseItem as any).relatedAlerts
+        ? (caseItem as any).relatedAlerts.map((ra: any) => ({
+            id: ra.alert?.id,
+            timestamp: ra.alert?.timestamp,
+            metadata: ra.alert?.metadata,
+          }))
+        : [],
       mttd:
         caseItem.createdAt && caseItem.acknowledgedAt
           ? Math.round((caseItem.acknowledgedAt.getTime() - caseItem.createdAt.getTime()) / (1000 * 60)) // minutes

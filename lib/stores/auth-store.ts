@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-export type UserRole = "admin" | "analyst" | "operator" | "trainee"
+export type UserRole = "administrator" | "analyst" | "read-only" | "admin" | "operator" | "trainee"
 
 interface User {
   id: string
@@ -17,6 +17,7 @@ interface AuthState {
   isAuthenticated: boolean
   login: (email: string, password: string) => Promise<void>
   logout: () => void
+  setUser: (user: User | null) => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -57,6 +58,9 @@ export const useAuthStore = create<AuthState>()(
       },
       logout: () => {
         set({ user: null, token: null, isAuthenticated: false })
+      },
+      setUser: (user: User | null) => {
+        set({ user, isAuthenticated: user !== null })
       },
     }),
     {

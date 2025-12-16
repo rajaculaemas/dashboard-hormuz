@@ -10,6 +10,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  output: 'standalone',
+  outputFileTracingRoot: '/home/soc/soc-dashboard',
   env: {
     STELLAR_CYBER_HOST: process.env.STELLAR_CYBER_HOST,
     STELLAR_CYBER_USER_ID: process.env.STELLAR_CYBER_USER_ID,

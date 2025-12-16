@@ -2,7 +2,7 @@ import { create } from "zustand"
 import type { StellarCyberAlert, AlertStatus } from "@/lib/config/stellar-cyber"
 
 interface AlertFilters {
-  timeRange: "1h" | "12h" | "24h" | "7d" | "all"
+  timeRange: "1h" | "2h" | "3h" | "6h" | "12h" | "24h" | "7d" | "all"
   status: AlertStatus | "all"
   severity: string | "all"
   source: string | "all"
@@ -14,6 +14,7 @@ interface AlertStore {
   error: string | null
   activeTab: AlertStatus | "all"
   filters: AlertFilters
+  searchQuery: string
   autoRefresh: boolean
   refreshInterval: NodeJS.Timeout | null
   lastSync: Date | null
@@ -27,6 +28,7 @@ interface AlertStore {
   setError: (error: string | null) => void
   setActiveTab: (tab: AlertStatus | "all") => void
   setFilters: (filters: Partial<AlertFilters>) => void
+  setSearchQuery: (query: string) => void
   setAutoRefresh: (enabled: boolean) => void
 
   // API Actions
@@ -52,7 +54,8 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
     severity: "all",
     source: "all",
   },
-  autoRefresh: true,
+  searchQuery: "",
+  autoRefresh: false,
   refreshInterval: null,
   lastSync: null,
   selectedIntegration: null,
@@ -76,6 +79,7 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
     set((state) => ({
       filters: { ...state.filters, ...newFilters },
     })),
+  setSearchQuery: (searchQuery) => set({ searchQuery }),
   setAutoRefresh: (autoRefresh) => {
     const { startAutoRefresh, stopAutoRefresh, selectedIntegration } = get()
 
@@ -88,7 +92,7 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
   },
 
   fetchAlerts: async () => {
-    const { setLoading, setError, setAlerts, filters } = get()
+    const { setLoading, setError, setAlerts, filters, selectedIntegration } = get()
 
     try {
       setLoading(true)
@@ -96,15 +100,22 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
 
       const params = new URLSearchParams()
 
+      if (selectedIntegration) {
+        params.append("integrationId", selectedIntegration)
+      }
+
       if (filters.timeRange !== "all") {
         const hours = {
           "1h": 1,
+          "2h": 2,
+          "3h": 3,
+          "6h": 6,
           "12h": 12,
           "24h": 24,
           "7d": 168,
         }[filters.timeRange]
 
-        const fromTime = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString()
+        const fromTime = new Date(Date.now() - (hours || 24) * 60 * 60 * 1000).toISOString()
         params.append("from", fromTime)
       }
 
@@ -123,7 +134,7 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
       }
 
       const data = await response.json()
-      setAlerts(data.alerts || [])
+      setAlerts(data.data || data.alerts || [])
     } catch (error) {
       console.error("Error fetching alerts:", error)
       setError(error instanceof Error ? error.message : "Failed to fetch alerts")
@@ -243,8 +254,37 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
   },
 
   getFilteredAlerts: () => {
-    const { alerts, activeTab } = get()
-    if (activeTab === "all") return alerts
-    return alerts.filter((alert) => alert.status === activeTab)
+    const { alerts, activeTab, searchQuery } = get()
+    const lowerSearchQuery = searchQuery.toLowerCase().trim()
+    
+    let filtered = alerts
+    
+    // Apply status filter
+    if (activeTab !== "all") {
+      filtered = filtered.filter((alert) => alert.status === activeTab)
+    }
+    
+    // Apply search filter if query is not empty
+    if (lowerSearchQuery) {
+      filtered = filtered.filter((alert) => {
+        const searchableText = [
+          alert.title,
+          alert.description,
+          alert.metadata?.assignee,
+          alert.metadata?.srcip,
+          alert.metadata?.dstip,
+          alert.metadata?.alert_type,
+          alert.source,
+          alert.id,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+        
+        return searchableText.includes(lowerSearchQuery)
+      })
+    }
+    
+    return filtered
   },
 }))

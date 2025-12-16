@@ -1,11 +1,20 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
+import { getCurrentUser } from "@/lib/auth/session"
+import { getUserAccessibleIntegrations } from "@/lib/auth/password"
 
 export async function GET() {
   try {
-    console.log("Fetching integrations...")
+    const currentUser = await getCurrentUser()
+    if (!currentUser) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 })
+    }
+
+    const accessibleIds = await getUserAccessibleIntegrations(currentUser.userId)
+    const whereClause = currentUser.role === "administrator" ? {} : { id: { in: accessibleIds } }
 
     const integrations = await prisma.integration.findMany({
+      where: whereClause,
       orderBy: {
         createdAt: "desc",
       },
@@ -41,6 +50,14 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const currentUser = await getCurrentUser()
+    if (!currentUser) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 })
+    }
+    if (currentUser.role !== "administrator") {
+      return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 })
+    }
+
     const body = await request.json()
     const { name, source, credentials, description } = body
 

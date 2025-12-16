@@ -10,6 +10,7 @@ interface IntegrationState {
   updateIntegration: (id: string, updates: Partial<Integration>) => Promise<void>
   deleteIntegration: (id: string) => Promise<void>
   testIntegration: (id: string) => Promise<any>
+  checkAllIntegrationsStatus: () => Promise<void>
 }
 
 export const useIntegrationStore = create<IntegrationState>((set, get) => ({
@@ -82,6 +83,12 @@ export const useIntegrationStore = create<IntegrationState>((set, get) => ({
         body: JSON.stringify(updates),
       })
 
+      if (!response.ok) {
+        const errorData = await response.json()
+        set({ error: errorData.error || "Failed to update integration", isLoading: false })
+        throw new Error(errorData.error || `HTTP ${response.status}`)
+      }
+
       const result = await response.json()
 
       if (result.success) {
@@ -138,7 +145,7 @@ export const useIntegrationStore = create<IntegrationState>((set, get) => ({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ integrationId: id }),
+        body: JSON.stringify({ id }),
       })
 
       const result = await response.json()
@@ -146,6 +153,26 @@ export const useIntegrationStore = create<IntegrationState>((set, get) => ({
     } catch (error) {
       console.error("Error testing integration:", error)
       throw error
+    }
+  },
+
+  checkAllIntegrationsStatus: async () => {
+    try {
+      const response = await fetch("/api/integrations/status")
+      const result = await response.json()
+
+      if (Array.isArray(result)) {
+        // Update integrations with latest status
+        const currentIntegrations = get().integrations || []
+        const updatedIntegrations = currentIntegrations.map((integration) => {
+          const statusUpdate = result.find((s) => s.id === integration.id)
+          return statusUpdate ? { ...integration, ...statusUpdate } : integration
+        })
+        set({ integrations: updatedIntegrations })
+      }
+    } catch (error) {
+      console.error("Error checking integrations status:", error)
+      // Don't set error state, just log it silently
     }
   },
 }))
