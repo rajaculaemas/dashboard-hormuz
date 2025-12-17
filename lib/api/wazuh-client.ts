@@ -96,7 +96,7 @@ export class WazuhClient {
     const alertsMap = new Map<string, WazuhAlert>()
 
     try {
-      const sinceDate = sinceTimestamp ? new Date(sinceTimestamp) : new Date(Date.now() - 6 * 60 * 60 * 1000) // Changed to 2 hours per user requirement
+      const sinceDate = sinceTimestamp ? new Date(sinceTimestamp) : new Date(Date.now() - 2 * 60 * 60 * 1000) // Changed to 2 hours per user requirement
       const since = this.formatEsDate(sinceDate)
       const sinceISO = sinceDate.toISOString() // ISO format for timestamp_utc
       const startEpoch = Math.floor(sinceDate.getTime() / 1000)

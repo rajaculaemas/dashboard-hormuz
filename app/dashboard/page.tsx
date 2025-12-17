@@ -42,6 +42,7 @@ import { WazuhAddToCaseDialog } from "@/components/alert/wazuh-add-to-case-dialo
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
+import { AlertTable } from "@/components/alert/alert-table"
 
 export default function AlertPanel() {
   const {
@@ -1147,139 +1148,33 @@ export default function AlertPanel() {
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="space-y-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-24 w-full" />
-              ))}
-            </div>
-          ) : (
-            <AnimatePresence>
-              <div className="space-y-4">
-                {filteredAlerts.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-center">
-                    <Bell className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                    <h3 className="text-lg font-medium">No alerts found</h3>
-                    <p className="text-muted-foreground">There are no alerts matching your current filter.</p>
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Current filters: Time Range: {filters.timeRange}, Status: {filters.status}, Severity:{" "}
-                      {filters.severity}
-                    </p>
-                    <p className="text-sm text-muted-foreground">Total alerts in database: {alertsArray.length}</p>
-                  </div>
-                ) : (
-                  filteredAlerts.map((alert) => (
-                    <motion.div
-                      key={alert.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      transition={{ duration: 0.2 }}
-                      className="border rounded-lg p-4 hover:bg-accent/50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          {!alert.metadata?.qradar && canUpdateAlert && (
-                            <Checkbox
-                              checked={selectedAlerts.includes(alert.id)}
-                              onCheckedChange={(checked) => {
-                                if (checked) {
-                                  setSelectedAlerts([...selectedAlerts, alert.id])
-                                } else {
-                                  setSelectedAlerts(selectedAlerts.filter((id) => id !== alert.id))
-                                }
-                              }}
-                            />
-                          )}
-                          <div className={`h-3 w-3 rounded-full flex-shrink-0 ${severityColor(alert.severity)}`} />
-                          <div className="min-w-0">
-                            <h3 className="font-medium break-words">
-                              {alert.title || alert.metadata?.rule?.description || alert.metadata?.ruleDescription || alert.description || "Unknown Alert"}
-                            </h3>
-                            <p className="text-sm text-muted-foreground truncate">{alert.description}</p>
-                          </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                          <Badge variant="outline" className={`${statusColor(alert.status)} bg-opacity-10 whitespace-nowrap`}>
-                            {alert.status}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground whitespace-nowrap">
-                            <SafeDate date={alert.created_at || alert.timestamp} />
-                          </span>
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="flex flex-col">
-                          {(() => {
-                            const integrationName = availableIntegrations.find((i) =>
-                              i.id === alert.integrationId || i.id === alert.integration_id || i.id === alert.integration?.id,
-                            )?.name
-
-                            const sourceFromMetadata = alert.metadata?.source || alert.integration_source
-                            let sourceLabel = sourceFromMetadata || integrationName || "Unknown"
-
-                            // If this alert came from QRadar, append offense id (or fallback alert id)
-                            if (alert.metadata?.qradar) {
-                              const offenseId =
-                                alert.metadata.qradar?.id || alert.metadata.qradar?.offense_id || alert.metadata.qradar?.offenseId
-                              if (offenseId) {
-                                sourceLabel = `${sourceLabel} (Offense ${offenseId})`
-                              } else if (alert.metadata?.alert_id) {
-                                sourceLabel = `${sourceLabel} (ID ${alert.metadata.alert_id})`
-                              }
-                            }
-
-                            return (
-                              <span className="text-xs text-muted-foreground">Source: {sourceLabel}</span>
-                            )
-                          })()}
-                          {alert.metadata?.agentName && (
-                            <span className="text-xs text-muted-foreground">
-                              Agent: {alert.metadata.agentName}
-                              {alert.metadata.agentIp && ` (${alert.metadata.agentIp})`}
-                            </span>
-                          )}
-                          {alert.metadata?.srcip && alert.metadata?.dstip && (
-                            <span className="text-xs text-muted-foreground">
-                              {alert.metadata.srcip} → {alert.metadata.dstip}
-                            </span>
-                          )}
-                          {alert.metadata?.assignee && (
-                            <span className="text-xs text-muted-foreground">Assignee: {alert.metadata.assignee}</span>
-                          )}
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="ghost" size="sm" onClick={() => {
-                            setSelectedAlert(alert)
-                            setShowAlertDetailModal(true)
-                          }}>
-                            Details
-                          </Button>
-                          {canUpdateAlert && (
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              onClick={() => {
-                                setSelectedAlert(alert)
-                                // Set initial assignee if alert already has one
-                                if (alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to) {
-                                  setSelectedAssignee(alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to)
-                                } else {
-                                  setSelectedAssignee("")
-                                }
-                                setShowUpdateStatusDialog(true)
-                              }}>
-                              Update Status
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))
-                )}
-              </div>
-            </AnimatePresence>
-          )}
+          <AlertTable
+            alerts={filteredAlerts}
+            loading={loading}
+            selectedAlerts={selectedAlerts}
+            availableIntegrations={availableIntegrations}
+            canUpdateAlert={canUpdateAlert}
+            onSelectAlert={(checked, alertId) => {
+              if (checked) {
+                setSelectedAlerts([...selectedAlerts, alertId])
+              } else {
+                setSelectedAlerts(selectedAlerts.filter((id) => id !== alertId))
+              }
+            }}
+            onViewDetails={(alert) => {
+              setSelectedAlert(alert)
+              setShowAlertDetailModal(true)
+            }}
+            onUpdateStatus={(alert) => {
+              setSelectedAlert(alert)
+              if (alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to) {
+                setSelectedAssignee(alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to)
+              } else {
+                setSelectedAssignee("")
+              }
+              setShowUpdateStatusDialog(true)
+            }}
+          />
         </CardContent>
       </Card>
 
