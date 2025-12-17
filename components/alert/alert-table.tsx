@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,6 +8,7 @@ import { Bell } from "lucide-react"
 import { SafeDate } from "@/components/ui/safe-date"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
+import type { AlertColumn } from "@/components/alert/alert-column-selector"
 
 interface AlertTableProps {
   alerts: any[]
@@ -16,6 +16,7 @@ interface AlertTableProps {
   selectedAlerts: string[]
   availableIntegrations: any[]
   canUpdateAlert: boolean
+  columns: AlertColumn[]
   onSelectAlert: (checked: boolean, alertId: string) => void
   onViewDetails: (alert: any) => void
   onUpdateStatus: (alert: any) => void
@@ -27,6 +28,7 @@ export function AlertTable({
   selectedAlerts,
   availableIntegrations,
   canUpdateAlert,
+  columns,
   onSelectAlert,
   onViewDetails,
   onUpdateStatus,
@@ -68,6 +70,96 @@ export function AlertTable({
     return integration?.name || "Unknown"
   }
 
+  const calculateMTTD = (alert: any) => {
+    try {
+      const alertTime = new Date(alert.timestamp || alert.created_at)
+      const updatedTime = new Date(alert.updatedAt || alert.updated_at || Date.now())
+      
+      if (!alertTime.getTime()) return "-"
+      
+      const diffMs = updatedTime.getTime() - alertTime.getTime()
+      const diffMins = Math.floor(diffMs / 60000)
+      
+      if (diffMins < 1) return "< 1m"
+      if (diffMins < 60) return `${diffMins}m`
+      
+      const diffHours = Math.floor(diffMins / 60)
+      if (diffHours < 24) return `${diffHours}h`
+      
+      const diffDays = Math.floor(diffHours / 24)
+      return `${diffDays}d`
+    } catch {
+      return "-"
+    }
+  }
+
+  const getColumnValue = (alert: any, columnId: string) => {
+    switch (columnId) {
+      case "timestamp":
+        return <SafeDate date={alert.timestamp || alert.created_at} />
+      case "title":
+        return alert.title || alert.metadata?.rule?.description || "Unknown"
+      case "srcip":
+        return alert.metadata?.srcip || alert.metadata?.source || alert.srcIp || "-"
+      case "dstip":
+        return alert.metadata?.dstip || alert.metadata?.destination || alert.dstIp || "-"
+      case "responseCode":
+        return alert.metadata?.http_status_code || alert.metadata?.responseCode || "-"
+      case "integration":
+        return getIntegrationName(alert)
+      case "mttd":
+        return calculateMTTD(alert)
+      case "severity":
+        return (
+          <Badge variant="outline" className={severityColor(alert.severity)}>
+            {alert.severity || "-"}
+          </Badge>
+        )
+      case "status":
+        return (
+          <Badge variant="outline" className={statusColor(alert.status)}>
+            {alert.status || "-"}
+          </Badge>
+        )
+      case "sourcePort":
+        return alert.metadata?.srcport || alert.metadata?.src_port || alert.srcPort || "-"
+      case "destinationPort":
+        return alert.metadata?.dstport || alert.metadata?.dst_port || alert.dstPort || "-"
+      case "protocol":
+        return alert.metadata?.protocol || "-"
+      case "agentName":
+        return alert.metadata?.agentName || alert.metadata?.agent?.name || "-"
+      case "agentIp":
+        return alert.metadata?.agentIp || alert.metadata?.agent?.ip || "-"
+      case "rule":
+        return alert.metadata?.ruleDescription || alert.metadata?.rule?.description || "-"
+      case "mitreTactic":
+        return alert.metadata?.mitreTactic || alert.metadata?.rule?.mitre?.tactic || "-"
+      case "mitreId":
+        return alert.metadata?.mitreId || alert.metadata?.rule?.mitre?.id || "-"
+      case "tags":
+        const tags = alert.metadata?.tags || []
+        return (
+          <div className="flex flex-wrap gap-1">
+            {tags.slice(0, 2).map((tag: string, idx: number) => (
+              <Badge key={idx} variant="secondary" className="text-xs">
+                {tag}
+              </Badge>
+            ))}
+            {tags.length > 2 && (
+              <Badge variant="secondary" className="text-xs">
+                +{tags.length - 2}
+              </Badge>
+            )}
+          </div>
+        )
+      default:
+        return "-"
+    }
+  }
+
+  const visibleColumns = columns.filter((col) => col.visible)
+
   if (loading) {
     return (
       <div className="border rounded-lg overflow-hidden">
@@ -75,13 +167,9 @@ export function AlertTable({
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
-              <TableHead>Alert Type</TableHead>
-              <TableHead>Severity</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Stage</TableHead>
-              <TableHead>Tactic</TableHead>
-              <TableHead>Tags</TableHead>
-              <TableHead>Monitored Tenants</TableHead>
+              {visibleColumns.map((col) => (
+                <TableHead key={col.id}>{col.label}</TableHead>
+              ))}
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -91,27 +179,11 @@ export function AlertTable({
                 <TableCell>
                   <Skeleton className="h-4 w-4" />
                 </TableCell>
-                <TableCell>
-                  <Skeleton className="h-4 w-24" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-6 w-16" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-6 w-16" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-4 w-20" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-4 w-20" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-4 w-20" />
-                </TableCell>
-                <TableCell>
-                  <Skeleton className="h-4 w-20" />
-                </TableCell>
+                {visibleColumns.map((col) => (
+                  <TableCell key={col.id}>
+                    <Skeleton className="h-4 w-24" />
+                  </TableCell>
+                ))}
                 <TableCell className="text-right">
                   <Skeleton className="h-8 w-20" />
                 </TableCell>
@@ -135,7 +207,7 @@ export function AlertTable({
 
   return (
     <AnimatePresence>
-      <div className="border rounded-lg overflow-hidden">
+      <div className="border rounded-lg overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/50">
@@ -145,29 +217,19 @@ export function AlertTable({
                   indeterminate={selectedAlerts.length > 0 && selectedAlerts.length < alerts.length}
                   onCheckedChange={(checked) => {
                     if (checked) {
-                      // Select all visible alerts
                       const allIds = alerts.filter(a => !a.metadata?.qradar).map(a => a.id)
-                      // Preserve existing selections and add new ones
-                      const combined = Array.from(new Set([...selectedAlerts, ...allIds]))
-                      // Manually trigger change by calling onSelectAlert for each new one
                       const toAdd = allIds.filter(id => !selectedAlerts.includes(id))
                       toAdd.forEach(id => onSelectAlert(true, id))
                     } else {
-                      // Deselect all visible alerts
                       const allIds = alerts.filter(a => !a.metadata?.qradar).map(a => a.id)
                       allIds.forEach(id => onSelectAlert(false, id))
                     }
                   }}
                 />
               </TableHead>
-              <TableHead>Alert Type</TableHead>
-              <TableHead className="text-right">Critical</TableHead>
-              <TableHead className="text-right">High Fidelity</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead>Stage</TableHead>
-              <TableHead>Tactic</TableHead>
-              <TableHead>Tags</TableHead>
-              <TableHead>Monitored Tenants</TableHead>
+              {visibleColumns.map((col) => (
+                <TableHead key={col.id}>{col.label}</TableHead>
+              ))}
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -189,53 +251,11 @@ export function AlertTable({
                     />
                   )}
                 </TableCell>
-                <TableCell className="font-medium max-w-xs truncate">
-                  {alert.title || alert.metadata?.rule?.description || alert.metadata?.ruleDescription || "Unknown Alert"}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Badge variant="outline" className="font-mono">
-                    {alerts.filter(a => a.severity === "Critical").length}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Badge variant="outline" className="font-mono">
-                    {alerts.filter(a => a.severity === "High").length}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Badge variant="outline" className="font-mono">
-                    {alerts.length}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <span className="text-sm text-muted-foreground">
-                    {alert.metadata?.stage || alert.metadata?.stage_name || "-"}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <span className="text-sm text-muted-foreground">
-                    {alert.metadata?.mitreTactic || alert.metadata?.tactic || "-"}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {(alert.metadata?.tags || []).slice(0, 2).map((tag: string, idx: number) => (
-                      <Badge key={idx} variant="secondary" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                    {(alert.metadata?.tags || []).length > 2 && (
-                      <Badge variant="secondary" className="text-xs">
-                        +{(alert.metadata?.tags || []).length - 2}
-                      </Badge>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <span className="text-sm text-muted-foreground">
-                    {getIntegrationName(alert)}
-                  </span>
-                </TableCell>
+                {visibleColumns.map((col) => (
+                  <TableCell key={col.id} className="max-w-xs truncate">
+                    {getColumnValue(alert, col.id)}
+                  </TableCell>
+                ))}
                 <TableCell className="text-right">
                   <div className="flex gap-2 justify-end">
                     <Button

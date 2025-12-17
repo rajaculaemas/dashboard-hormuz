@@ -43,6 +43,7 @@ import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-
 import { Checkbox } from "@/components/ui/checkbox"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
 import { AlertTable } from "@/components/alert/alert-table"
+import { AlertColumnSelector, DEFAULT_COLUMNS, type AlertColumn } from "@/components/alert/alert-column-selector"
 
 export default function AlertPanel() {
   const {
@@ -115,6 +116,7 @@ export default function AlertPanel() {
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date } | undefined>(undefined)
   const [accessibleIntegrationIds, setAccessibleIntegrationIds] = useState<string[]>([])
   const [allFilteredAlerts, setAllFilteredAlerts] = useState<any[]>([])
+  const [alertColumns, setAlertColumns] = useState<AlertColumn[]>(DEFAULT_COLUMNS)
 
   // Set default integration saat komponen mount
   useEffect(() => {
@@ -1062,42 +1064,48 @@ export default function AlertPanel() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle>Alert Feed</CardTitle>
-            {selectedAlerts.length > 0 && canUpdateAlert && (
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => {
-                  // Check if all selected alerts are from the same integration
-                  const selectedAlertObjs = selectedAlerts
-                    .map((id) => alerts.find((a) => a.id === id))
-                    .filter(Boolean) as any[]
-                  
-                  const integrations = new Set(selectedAlertObjs.map((a) => a.integrationId))
-                  
-                  if (integrations.size !== 1) {
-                    alert("Please select alerts from the same integration")
-                    return
-                  }
-                  
-                  // Check if alerts are from Wazuh by looking at metadata or integration source
-                  const firstAlert = selectedAlertObjs[0]
-                  const isWazuh = firstAlert?.metadata?.agentId ||
-                                 firstAlert?.integration?.source?.toLowerCase() === "wazuh" ||
-                                 firstAlert?.source?.toLowerCase() === "wazuh"
-                  
-                  if (isWazuh) {
-                    // For Wazuh, use Wazuh dialog
-                    setWazuhCaseAlertIds(selectedAlerts)
-                    setWazuhAddToCaseOpen(true)
-                  } else {
-                    // For other integrations, use standard dialog
-                    setAddToCaseDialogOpen(true)
-                  }
-                }}
-              >
-                Add {selectedAlerts.length} Alert{selectedAlerts.length > 1 ? "s" : ""} to Case
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              <AlertColumnSelector 
+                columns={alertColumns} 
+                onColumnsChange={setAlertColumns}
+              />
+              {selectedAlerts.length > 0 && canUpdateAlert && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => {
+                    // Check if all selected alerts are from the same integration
+                    const selectedAlertObjs = selectedAlerts
+                      .map((id) => alerts.find((a) => a.id === id))
+                      .filter(Boolean) as any[]
+                    
+                    const integrations = new Set(selectedAlertObjs.map((a) => a.integrationId))
+                    
+                    if (integrations.size !== 1) {
+                      alert("Please select alerts from the same integration")
+                      return
+                    }
+                    
+                    // Check if alerts are from Wazuh by looking at metadata or integration source
+                    const firstAlert = selectedAlertObjs[0]
+                    const isWazuh = firstAlert?.metadata?.agentId ||
+                                   firstAlert?.integration?.source?.toLowerCase() === "wazuh" ||
+                                   firstAlert?.source?.toLowerCase() === "wazuh"
+                    
+                    if (isWazuh) {
+                      // For Wazuh, use Wazuh dialog
+                      setWazuhCaseAlertIds(selectedAlerts)
+                      setWazuhAddToCaseOpen(true)
+                    } else {
+                      // For other integrations, use standard dialog
+                      setAddToCaseDialogOpen(true)
+                    }
+                  }}
+                >
+                  Add {selectedAlerts.length} Alert{selectedAlerts.length > 1 ? "s" : ""} to Case
+                </Button>
+              )}
+            </div>
           </div>
           <Tabs
             defaultValue="all"
@@ -1154,6 +1162,7 @@ export default function AlertPanel() {
             selectedAlerts={selectedAlerts}
             availableIntegrations={availableIntegrations}
             canUpdateAlert={canUpdateAlert}
+            columns={alertColumns}
             onSelectAlert={(checked, alertId) => {
               if (checked) {
                 setSelectedAlerts([...selectedAlerts, alertId])
