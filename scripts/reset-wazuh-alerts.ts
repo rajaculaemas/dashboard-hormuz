@@ -53,6 +53,12 @@ async function resetWazuhAlerts() {
 
     console.log(`🗑️  Deleted ${deletedAlerts.count} Wazuh alerts from database`)
 
+    // Reset last_sync cursor to allow backfill
+    await prisma.integration.update({
+      where: { id: wazuhIntegration.id },
+      data: { lastSync: null },
+    })
+
     // Now fetch fresh alerts from Wazuh
     console.log("🔄 Fetching fresh Wazuh alerts...")
 

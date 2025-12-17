@@ -65,7 +65,10 @@ async function getWazuhCredentials(integrationId?: string): Promise<WazuhCredent
 /**
  * Fetch alerts from Wazuh Elasticsearch
  */
-export async function getAlerts(integrationId?: string): Promise<any> {
+export async function getAlerts(
+  integrationId?: string,
+  options?: { since?: string; hoursBack?: number; resetCursor?: boolean },
+): Promise<any> {
   try {
     const credentials = await getWazuhCredentials(integrationId)
 
@@ -87,17 +90,19 @@ export async function getAlerts(integrationId?: string): Promise<any> {
     }
 
     const lastSync = integration?.lastSync
-    // Use lastSync if available (incremental sync), otherwise fetch from 12 hours ago (initial sync)
     let since: string
-    if (lastSync) {
-      // Incremental sync: fetch from last sync time
-      // Go back 5 minutes before lastSync to catch any borderline alerts
+    if (options?.since) {
+      since = options.since
+      console.log(`[Wazuh] Override since provided: ${since}`)
+    } else if (options?.hoursBack && options.hoursBack > 0) {
+      since = new Date(Date.now() - options.hoursBack * 60 * 60 * 1000).toISOString()
+      console.log(`[Wazuh] Backfill - fetching last ${options.hoursBack} hours`)
+    } else if (lastSync && !options?.resetCursor) {
       const syncTime = new Date(lastSync.getTime() - 5 * 60 * 1000)
       since = syncTime.toISOString()
       console.log(`[Wazuh] Incremental sync - fetching from last sync at: ${lastSync.toISOString()}`)
     } else {
-      // Initial sync: fetch from last 12 hours
-      since = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString()
+      since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
       console.log(`[Wazuh] Initial sync - fetching from last 12 hours`)
     }
     

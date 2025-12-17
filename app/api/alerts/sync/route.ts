@@ -50,7 +50,16 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        const result = await getWazuhAlerts(integrationId)
+        const resetCursorHeader = request.headers.get("X-Wazuh-Reset-Cursor")
+        const hoursBackHeader = request.headers.get("X-Wazuh-Hours-Back")
+        const sinceHeader = request.headers.get("X-Wazuh-Since")
+        const hoursBack = hoursBackHeader ? parseInt(hoursBackHeader, 10) : undefined
+
+        const result = await getWazuhAlerts(integrationId, {
+          resetCursor: resetCursorHeader === "true",
+          hoursBack,
+          since: sinceHeader || undefined,
+        })
         console.log(`[Wazuh] Synced ${result.count} alerts`)
 
         await prisma.integration.update({
