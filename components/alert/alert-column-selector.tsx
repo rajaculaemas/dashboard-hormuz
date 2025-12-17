@@ -75,9 +75,6 @@ export function AlertColumnSelector({ columns, onColumnsChange }: AlertColumnSel
             <Checkbox
               id="toggle-all"
               checked={columns.every((col) => col.visible)}
-              indeterminate={
-                visibleCount > 0 && visibleCount < columns.length
-              }
               onCheckedChange={handleToggleAll}
             />
             <Label htmlFor="toggle-all" className="text-sm font-medium cursor-pointer">

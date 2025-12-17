@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -33,6 +34,18 @@ export function AlertTable({
   onViewDetails,
   onUpdateStatus,
 }: AlertTableProps) {
+  // Debug: Log alert structure on first render or when alerts change
+  useEffect(() => {
+    if (alerts.length > 0) {
+      console.log('[AlertTable] First alert structure:', {
+        id: alerts[0].id,
+        title: alerts[0].title,
+        metadata: alerts[0].metadata,
+        topLevelFields: Object.keys(alerts[0]).filter(k => !['metadata', 'integration', 'id', 'title', 'description'].includes(k)),
+      })
+    }
+  }, [alerts])
+
   const severityColor = (severity: string | null | undefined) => {
     switch (severity) {
       case "Critical":
@@ -97,48 +110,144 @@ export function AlertTable({
     switch (columnId) {
       case "timestamp":
         return <SafeDate date={alert.timestamp || alert.created_at} />
+
       case "title":
-        return alert.title || alert.metadata?.rule?.description || "Unknown"
+        return alert.title || alert.metadata?.rule?.description || alert.metadata?.ruleDescription || alert.description || "Unknown"
+
       case "srcip":
-        return alert.metadata?.srcip || alert.metadata?.source || alert.srcIp || "-"
+        // Wazuh stores as metadata.srcIp (camelCase) - check that first
+        return (
+          alert.metadata?.srcIp ||  // Wazuh primary
+          alert.metadata?.srcip || 
+          alert.metadata?.source_ip ||
+          alert.metadata?.src_ip ||
+          alert.metadata?.sourceAddress ||
+          alert.srcIp ||  // Top level
+          alert.srcip ||
+          "-"
+        )
+
       case "dstip":
-        return alert.metadata?.dstip || alert.metadata?.destination || alert.dstIp || "-"
+        // Wazuh stores as metadata.dstIp (camelCase) - check that first
+        return (
+          alert.metadata?.dstIp ||  // Wazuh primary
+          alert.metadata?.dstip || 
+          alert.metadata?.destination_ip ||
+          alert.metadata?.dst_ip ||
+          alert.metadata?.destinationAddress ||
+          alert.dstIp ||  // Top level
+          alert.dstip ||
+          "-"
+        )
+
       case "responseCode":
-        return alert.metadata?.http_status_code || alert.metadata?.responseCode || "-"
+        return (
+          alert.metadata?.http_status_code ||
+          alert.metadata?.status_code ||
+          alert.metadata?.response_code ||
+          alert.metadata?.responseCode ||
+          alert.metadata?.status ||
+          "-"
+        )
+
       case "integration":
         return getIntegrationName(alert)
+
       case "mttd":
         return calculateMTTD(alert)
+
       case "severity":
         return (
           <Badge variant="outline" className={severityColor(alert.severity)}>
             {alert.severity || "-"}
           </Badge>
         )
+
       case "status":
         return (
           <Badge variant="outline" className={statusColor(alert.status)}>
             {alert.status || "-"}
           </Badge>
         )
+
       case "sourcePort":
-        return alert.metadata?.srcport || alert.metadata?.src_port || alert.srcPort || "-"
+        // Wazuh stores as metadata.srcPort (camelCase)
+        return (
+          alert.metadata?.srcPort ||  // Wazuh primary
+          alert.metadata?.srcport ||
+          alert.metadata?.src_port ||
+          alert.metadata?.source_port ||
+          alert.srcPort ||
+          "-"
+        )
+
       case "destinationPort":
-        return alert.metadata?.dstport || alert.metadata?.dst_port || alert.dstPort || "-"
+        // Wazuh stores as metadata.dstPort (camelCase)
+        return (
+          alert.metadata?.dstPort ||  // Wazuh primary
+          alert.metadata?.dstport ||
+          alert.metadata?.dst_port ||
+          alert.metadata?.destination_port ||
+          alert.dstPort ||
+          "-"
+        )
+
       case "protocol":
-        return alert.metadata?.protocol || "-"
+        // Wazuh stores as metadata.protocol
+        return (
+          alert.metadata?.protocol ||
+          alert.metadata?.http_method ||
+          alert.protocol ||
+          "-"
+        )
+
       case "agentName":
-        return alert.metadata?.agentName || alert.metadata?.agent?.name || "-"
+        return (
+          alert.metadata?.agent?.name ||
+          alert.metadata?.agentName ||
+          alert.metadata?.agent_name ||
+          alert.agent?.name ||
+          "-"
+        )
+
       case "agentIp":
-        return alert.metadata?.agentIp || alert.metadata?.agent?.ip || "-"
+        return (
+          alert.metadata?.agent?.ip ||
+          alert.metadata?.agentIp ||
+          alert.metadata?.agent_ip ||
+          alert.agent?.ip ||
+          "-"
+        )
+
       case "rule":
-        return alert.metadata?.ruleDescription || alert.metadata?.rule?.description || "-"
+        return (
+          alert.metadata?.rule?.description ||
+          alert.metadata?.ruleDescription ||
+          alert.metadata?.rule_description ||
+          alert.rule?.description ||
+          "-"
+        )
+
       case "mitreTactic":
-        return alert.metadata?.mitreTactic || alert.metadata?.rule?.mitre?.tactic || "-"
+        return (
+          alert.metadata?.rule?.mitre?.tactic?.[0] ||
+          alert.metadata?.mitreTactic ||
+          alert.metadata?.mitre_tactic ||
+          alert.rule?.mitre?.tactic?.[0] ||
+          "-"
+        )
+
       case "mitreId":
-        return alert.metadata?.mitreId || alert.metadata?.rule?.mitre?.id || "-"
+        return (
+          alert.metadata?.rule?.mitre?.id?.[0] ||
+          alert.metadata?.mitreId ||
+          alert.metadata?.mitre_id ||
+          alert.rule?.mitre?.id?.[0] ||
+          "-"
+        )
+
       case "tags":
-        const tags = alert.metadata?.tags || []
+        const tags = alert.metadata?.tags || alert.tags || []
         return (
           <div className="flex flex-wrap gap-1">
             {tags.slice(0, 2).map((tag: string, idx: number) => (
@@ -153,6 +262,7 @@ export function AlertTable({
             )}
           </div>
         )
+
       default:
         return "-"
     }
@@ -214,7 +324,6 @@ export function AlertTable({
               <TableHead className="w-12">
                 <Checkbox
                   checked={selectedAlerts.length > 0 && selectedAlerts.length === alerts.length}
-                  indeterminate={selectedAlerts.length > 0 && selectedAlerts.length < alerts.length}
                   onCheckedChange={(checked) => {
                     if (checked) {
                       const allIds = alerts.filter(a => !a.metadata?.qradar).map(a => a.id)
