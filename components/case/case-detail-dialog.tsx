@@ -212,11 +212,20 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           console.log("Frontend: Using alerts from caseDetail, count:", caseDetail.alerts.length)
           
           const transformedAlerts = caseDetail.alerts.map((caseAlert: any) => {
-            // caseAlert should have an 'alert' property with the full alert object
             const alert = caseAlert.alert || caseAlert;
-            
             console.log("Frontend: Processing alert:", alert)
-            
+
+            // Preserve and augment metadata with top-level hash fields if present
+            const meta = Object.assign({}, alert.metadata || {})
+            // Ensure data_id (HTTP response code) is preserved from possible locations
+            if (!meta.data_id) meta.data_id = alert.data_id || alert.dataId || alert.metadata?.data_id || alert.metadata?.dataId || alert.raw_es?.data_id || alert.raw_es?.id || alert.data?.id || undefined
+            if (!meta.hash_sha256 && alert.hash_sha256) meta.hash_sha256 = alert.hash_sha256
+            if (!meta.sha256 && alert.sha256) meta.sha256 = alert.sha256
+            if (!meta.sacti_search && alert.sacti_search) meta.sacti_search = alert.sacti_search
+            if (!meta.data_win_eventdata_hashes && alert.data_win_eventdata_hashes) meta.data_win_eventdata_hashes = alert.data_win_eventdata_hashes
+            if (!meta.md5 && alert.md5) meta.md5 = alert.md5
+            if (!meta.sha1 && alert.sha1) meta.sha1 = alert.sha1
+
             // For Wazuh alerts, preserve full metadata structure so WazuhAlertDetailDialog can access it
             return {
               _id: alert.id,
@@ -230,7 +239,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
               source_ip: alert.metadata?.srcIp || alert.metadata?.srcip,
               dest_ip: alert.metadata?.dstIp || alert.metadata?.dstip,
               description: alert.description,
-              metadata: alert.metadata || {},
+              metadata: meta,
               id: alert.id,
               externalId: alert.externalId,
               title: alert.title,
@@ -278,6 +287,16 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           if (data.cases && data.cases[0] && data.cases[0].alerts) {
             const transformedAlerts = data.cases[0].alerts.map((caseAlert: any) => {
               const alert = caseAlert.alert || caseAlert;
+              const meta = Object.assign({}, alert.metadata || {})
+              // Ensure data_id (HTTP response code) is preserved from possible locations
+              if (!meta.data_id) meta.data_id = alert.data_id || alert.dataId || alert.metadata?.data_id || alert.metadata?.dataId || alert.raw_es?.data_id || alert.raw_es?.id || alert.data?.id || undefined
+              if (!meta.hash_sha256 && alert.hash_sha256) meta.hash_sha256 = alert.hash_sha256
+              if (!meta.sha256 && alert.sha256) meta.sha256 = alert.sha256
+              if (!meta.sacti_search && alert.sacti_search) meta.sacti_search = alert.sacti_search
+              if (!meta.data_win_eventdata_hashes && alert.data_win_eventdata_hashes) meta.data_win_eventdata_hashes = alert.data_win_eventdata_hashes
+              if (!meta.md5 && alert.md5) meta.md5 = alert.md5
+              if (!meta.sha1 && alert.sha1) meta.sha1 = alert.sha1
+
               return {
                 _id: alert.id,
                 alert_name: alert.title,
@@ -290,7 +309,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                 source_ip: alert.metadata?.srcIp || alert.metadata?.srcip,
                 dest_ip: alert.metadata?.dstIp || alert.metadata?.dstip,
                 description: alert.description,
-                metadata: alert.metadata || {},
+                metadata: meta,
                 id: alert.id,
                 externalId: alert.externalId,
                 title: alert.title,
@@ -327,8 +346,40 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
             setAlerts(transformedAlerts)
             console.log("Frontend: Successfully fetched and transformed alerts from API:", transformedAlerts.length)
           } else {
-            console.error("Frontend: No alerts found in API response")
-            setAlerts([])
+            console.error("Frontend: No alerts found in API response", data)
+            // Fallback: try the generic case alerts endpoint in case Wazuh API returned empty
+            try {
+              console.log("Frontend: Falling back to /api/cases/{id}/alerts")
+              const fallbackResp = await fetch(`/api/cases/${id}/alerts`)
+              const fallbackData = await fallbackResp.json()
+              console.log("Frontend: Fallback alerts response:", fallbackData)
+              if (fallbackData.success && fallbackData.data) {
+                const alertsData = fallbackData.data.alerts || fallbackData.data || []
+                if (Array.isArray(alertsData) && alertsData.length > 0) {
+                  const transformedAlerts = alertsData.map((alert: any) => ({
+                    _id: alert.metadata?.alert_id || alert.externalId || alert.id || alert._id,
+                    alert_name: alert.metadata?.alert_name || alert.title || alert.alert_name || "Unknown",
+                    severity: String(alert.metadata?.severity || alert.severity || "Unknown"),
+                    alert_time: alert.alert_time || (alert.timestamp ? new Date(alert.timestamp).getTime() : 0),
+                    status: alert.metadata?.event_status || alert.status || "Unknown",
+                    metadata: alert.metadata || {},
+                    id: alert.id,
+                    externalId: alert.externalId,
+                    title: alert.title,
+                    timestamp: alert.timestamp,
+                  }))
+                  setAlerts(transformedAlerts)
+                  console.log("Frontend: Set alerts from fallback endpoint:", transformedAlerts.length)
+                } else {
+                  setAlerts([])
+                }
+              } else {
+                setAlerts([])
+              }
+            } catch (fbErr) {
+              console.error("Frontend: Fallback fetch failed:", fbErr)
+              setAlerts([])
+            }
           }
         }
       } else {

@@ -39,14 +39,19 @@ export async function POST() {
         
         console.log(`Syncing from URL: ${syncUrl}`)
 
+        // For Wazuh, include resetCursor and hoursBack so auto-sync behaves like manual script
+        const bodyPayload: any = { integrationId: integration.id }
+        if (integration.source === "wazuh") {
+          bodyPayload.resetCursor = true
+          bodyPayload.hoursBack = 3
+        }
+
         const syncResponse = await fetch(syncUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            integrationId: integration.id,
-          }),
+          body: JSON.stringify(bodyPayload),
         })
 
         // Check response status and content type

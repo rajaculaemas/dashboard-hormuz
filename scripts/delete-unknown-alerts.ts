@@ -18,12 +18,14 @@ async function main() {
 
     const deleted = await prisma.alert.deleteMany({
       where: {
-        integrationId: wazuhIntegration.id,
-        title: "[Unknown] Alert",
+        title: {
+            contains: "SSL VPN tunnel up",
+            mode: "insensitive",
+        },
       },
     })
 
-    console.log(`✓ Deleted ${deleted.count} unknown alerts from Wazuh`)
+    console.log(`✓ Deleted ${deleted.count} SSL VPN tunnel up`)
   } catch (error) {
     console.error("Error:", error)
   } finally {

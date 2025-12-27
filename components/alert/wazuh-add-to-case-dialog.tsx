@@ -31,27 +31,32 @@ export function WazuhAddToCaseDialog({
   const [currentUser, setCurrentUser] = useState<{ id: string; name: string } | null>(null)
 
   useEffect(() => {
-    // Fetch users for assignee selection
-    const fetchUsers = async () => {
+    // Fetch current user and users for assignee selection
+    const fetchData = async () => {
       try {
-        const response = await fetch("/api/users")
-        if (response.ok) {
-          const data = await response.json()
-          // Extract users array from response
-          const usersList = data.users || data || []
-          setUsers(usersList)
-          // Set current user as first user (admin) if not already set
-          if (usersList.length > 0 && !currentUser) {
-            setCurrentUser({ id: usersList[0].id, name: usersList[0].name })
+        // Try to get the currently authenticated user
+        const meResp = await fetch('/api/auth/me')
+        if (meResp.ok) {
+          const meData = await meResp.json()
+          if (meData?.user) {
+            setCurrentUser({ id: meData.user.id, name: meData.user.name || meData.user.email })
           }
         }
+
+        // Fetch users list for assignee dropdown
+        const response = await fetch('/api/users')
+        if (response.ok) {
+          const data = await response.json()
+          const usersList = data.users || data || []
+          setUsers(usersList)
+        }
       } catch (error) {
-        console.error("Failed to fetch users:", error)
+        console.error('Failed to fetch users or current user:', error)
       }
     }
 
     if (open) {
-      fetchUsers()
+      fetchData()
     }
   }, [open])
 

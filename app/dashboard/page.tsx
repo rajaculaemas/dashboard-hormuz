@@ -42,7 +42,7 @@ import { WazuhAddToCaseDialog } from "@/components/alert/wazuh-add-to-case-dialo
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
-import { AlertTable } from "@/components/alert/alert-table"
+import { AlertTable, type AlertFilter } from "@/components/alert/alert-table"
 import { AlertColumnSelector, DEFAULT_COLUMNS, type AlertColumn } from "@/components/alert/alert-column-selector"
 
 export default function AlertPanel() {
@@ -70,6 +70,7 @@ export default function AlertPanel() {
   const { integrations, fetchIntegrations } = useIntegrationStore()
   const { user } = useAuthStore()
   const canUpdateAlert = user ? hasPermission(user.role, 'update_alert_status') : false
+  const canDeleteAlert = user ? hasPermission(user.role, 'delete_alert') : false
   
   // Debug log
   useEffect(() => {
@@ -97,6 +98,11 @@ export default function AlertPanel() {
   const [showClosingReasonDialog, setShowClosingReasonDialog] = useState(false)
   const [selectedAssignee, setSelectedAssignee] = useState<string | null>(null)
   const [selectedEvent, setSelectedEvent] = useState<any>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteMode, setDeleteMode] = useState<'single' | 'bulk' | null>(null)
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [deleteTargetIds, setDeleteTargetIds] = useState<string[]>([])
+  const [isDeleting, setIsDeleting] = useState(false)
   const [showEventDetailModal, setShowEventDetailModal] = useState(false)
   const [showAlertDetailModal, setShowAlertDetailModal] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -111,12 +117,33 @@ export default function AlertPanel() {
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
   const [appUsers, setAppUsers] = useState<Array<{ id: string; name: string }>>([{ id: "admin-user-1", name: "Admin" }])
   const [showUpdateStatusDialog, setShowUpdateStatusDialog] = useState(false)
+  const [showBulkUpdateDialog, setShowBulkUpdateDialog] = useState(false)
+  const [bulkUpdateStatus, setBulkUpdateStatus] = useState<AlertStatus | string>("In Progress")
+  const [bulkUpdateSeverity, setBulkUpdateSeverity] = useState<string | null>(null)
+  const [bulkUpdateAssignee, setBulkUpdateAssignee] = useState<string | null>(null)
+  const [bulkUpdateComments, setBulkUpdateComments] = useState("")
+  const [bulkSeverityBasedOnAnalysis, setBulkSeverityBasedOnAnalysis] = useState<string | null>(null)
+  const [bulkAnalysisNotes, setBulkAnalysisNotes] = useState("")
   const [pendingSearchQuery, setPendingSearchQuery] = useState("")
   const [useAbsoluteDate, setUseAbsoluteDate] = useState(false)
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date } | undefined>(undefined)
   const [accessibleIntegrationIds, setAccessibleIntegrationIds] = useState<string[]>([])
   const [allFilteredAlerts, setAllFilteredAlerts] = useState<any[]>([])
   const [alertColumns, setAlertColumns] = useState<AlertColumn[]>(DEFAULT_COLUMNS)
+  const [exporting, setExporting] = useState(false)
+  const [alertFilters, setAlertFilters] = useState<AlertFilter[]>([])
+  const [sortBy, setSortBy] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<"asc"|"desc"|null>(null)
+  const handleSortChange = (columnId: string) => {
+    if (sortBy !== columnId) {
+      setSortBy(columnId)
+      setSortDir('asc')
+      return
+    }
+    if (sortDir === 'asc') setSortDir('desc')
+    else if (sortDir === 'desc') { setSortBy(null); setSortDir(null) }
+    else setSortDir('asc')
+  }
 
   // Set default integration saat komponen mount
   useEffect(() => {
@@ -152,6 +179,13 @@ export default function AlertPanel() {
     }
     fetchAccessibleIntegrations()
   }, [integrations])
+
+  // When filters change, reset to page 1 and reload
+  useEffect(() => {
+    setCurrentPage(1)
+    // Reload all alerts for filtering + pagination
+    loadAllFilteredAlerts()
+  }, [alertFilters])
 
   // Fetch application users for Wazuh alert assignee
   useEffect(() => {
@@ -204,7 +238,7 @@ export default function AlertPanel() {
     return `${year}-${month}-${day}`
   }
 
-  const loadAlerts = async (page: number = 1, size: number = pageSize, search?: string) => {
+  const loadAlerts = async (page: number = 1, size: number = pageSize, search?: string, overrides?: { status?: string }) => {
     try {
       setRefreshing(true)
 
@@ -224,10 +258,11 @@ export default function AlertPanel() {
       let fromDate: Date
 
       if (useAbsoluteDate && dateRange) {
-        // Use absolute date range from picker
+        // Use absolute date range from picker. Send full ISO datetimes so
+        // server can apply hour/minute granularity when provided.
         fromDate = dateRange.from
-        params.append("from_date", formatLocalDate(dateRange.from))
-        params.append("to_date", formatLocalDate(dateRange.to))
+        params.append("from_date", dateRange.from.toISOString())
+        params.append("to_date", dateRange.to.toISOString())
         params.append("time_range", "custom")
       } else {
         // Use relative time range
@@ -259,8 +294,10 @@ export default function AlertPanel() {
         params.append("time_range", filters.timeRange || "7d")
       }
 
-      if (filters.status && filters.status !== "all") {
-        params.append("status", filters.status)
+      // Prefer explicit override when provided (used to avoid race when updating store then reloading)
+      const effectiveStatus = overrides?.status ?? filters.status
+      if (effectiveStatus && effectiveStatus !== "all") {
+        params.append("status", effectiveStatus)
       }
 
       if (filters.severity && filters.severity !== "all") {
@@ -327,19 +364,27 @@ export default function AlertPanel() {
       const now = new Date()
 
       if (useAbsoluteDate && dateRange) {
-        params.append("from_date", formatLocalDate(dateRange.from))
-        params.append("to_date", formatLocalDate(dateRange.to))
+        // Send ISO datetimes for unambiguous server-side handling
+        params.append("from_date", dateRange.from.toISOString())
+        params.append("to_date", dateRange.to.toISOString())
         params.append("time_range", "custom")
       } else {
         params.append("time_range", filters.timeRange || "7d")
       }
 
-      if (filters.status && filters.status !== "all") {
-        params.append("status", filters.status)
+      // Prefer explicit override when provided (used to avoid race when updating store then reloading)
+      const effectiveStatus = (arguments && arguments[0] && (arguments[0] as any).status) || filters.status
+      if (effectiveStatus && effectiveStatus !== "all") {
+        params.append("status", effectiveStatus)
       }
 
       if (filters.severity && filters.severity !== "all") {
         params.append("severity", filters.severity)
+      }
+
+      // Tambahkan parameter search jika ada query
+      if (pendingSearchQuery && pendingSearchQuery.trim() !== "") {
+        params.append("search", pendingSearchQuery.trim())
       }
 
       console.log("Loading all filtered alerts with params:", Object.fromEntries(params))
@@ -373,6 +418,196 @@ export default function AlertPanel() {
       console.error("Failed to sync alerts:", error)
     } finally {
       setSyncing(false)
+    }
+  }
+
+  // Filter management functions
+  const handleAddFilter = (filter: AlertFilter) => {
+    setAlertFilters(prev => [...prev, filter])
+    setCurrentPage(1)
+  }
+
+  const handleRemoveFilter = (id: string) => {
+    setAlertFilters(prev => prev.filter(f => f.id !== id))
+    setCurrentPage(1)
+  }
+
+  const handleClearFilters = () => {
+    setAlertFilters([])
+    setCurrentPage(1)
+  }
+
+  // Apply client-side filters to alerts
+  // Include filters are applied as an AND (alert must match all include filters)
+  // Exclude filters remove any alert that matches any exclude filter
+  const applyFilters = (alerts: any[]): any[] => {
+    // Start from a copy so we don't mutate the original array
+    let working = Array.isArray(alerts) ? [...alerts] : []
+
+    // Apply tab-based status filtering client-side only. This ensures the Tabs
+    // control filters the already-loaded table data and doesn't trigger a
+    // server-side reload or change the sync filters.
+    if (activeTab && activeTab !== "all") {
+      working = working.filter((a) => {
+        const s = a.status || a.metadata?.status || ""
+        return String(s) === String(activeTab)
+      })
+    }
+
+    if (alertFilters.length === 0) return working
+
+    const includeFilters = alertFilters.filter((f) => f.type === "include")
+    const excludeFilters = alertFilters.filter((f) => f.type === "exclude")
+
+    return working.filter((alert) => {
+      // Exclude: if any exclude filter matches, drop the alert
+      if (excludeFilters.length > 0) {
+        const matchedExclude = excludeFilters.some((filter) => {
+          const alertValue = getAlertColumnValue(alert, filter.column)
+          const alertStr = (alertValue === undefined || alertValue === null) ? "" : String(alertValue).toLowerCase().trim()
+          const filterStr = String(filter.value).toLowerCase().trim()
+          return alertStr === filterStr
+        })
+        if (matchedExclude) return false
+      }
+
+      // Include: if there are include filters, the alert must satisfy ALL include filters
+      if (includeFilters.length > 0) {
+        const allIncludeMatch = includeFilters.every((filter) => {
+          const alertValue = getAlertColumnValue(alert, filter.column)
+          const alertStr = (alertValue === undefined || alertValue === null) ? "" : String(alertValue).toLowerCase().trim()
+          const filterStr = String(filter.value).toLowerCase().trim()
+          return alertStr === filterStr
+        })
+        return allIncludeMatch
+      }
+
+      return true
+    })
+  }
+
+  // Helper to get alert value by column for filtering
+  const getAlertColumnValue = (alert: any, columnId: string): any => {
+    const meta = alert.metadata || {}
+    const normalizeHttpStatus = (v: any): string | null => {
+      if (v === undefined || v === null) return null
+      try {
+        const s = String(v)
+        const m = s.match(/(\d{3})/)
+        if (m && m[1]) {
+          const n = parseInt(m[1], 10)
+          if (n >= 100 && n <= 599) return String(n)
+        }
+      } catch {}
+      return null
+    }
+    // Helper to extract response code from parsed message payload (Wazuh)
+    const extractResponseFromMessage = (): any => {
+      try {
+        if (!meta.message || typeof meta.message !== 'string') return null
+        let parsed: any = {}
+        try { parsed = JSON.parse(meta.message) } catch { return null }
+        const get = (fn: () => any) => { try { const v = fn(); return v === undefined ? undefined : v } catch { return undefined } }
+        return (
+          get(() => parsed.data.win.eventdata.id) ||
+          get(() => parsed.data.id) ||
+          get(() => parsed.data.columns?.id) ||
+          get(() => parsed.data?.http?.response?.status_code) ||
+          get(() => parsed.data?.http?.response?.status) ||
+          null
+        )
+      } catch {
+        return null
+      }
+    }
+    switch (columnId) {
+      case "timestamp":
+        return alert.timestamp || alert.created_at || meta.timestamp || meta.raw_es?.timestamp || null
+      case "title":
+      case "alertName":
+        return alert.title || meta.rule?.description || meta.ruleDescription || alert.description || "Unknown"
+      case "srcip":
+      case "sourceIp":
+        return (
+          meta.srcIp ||
+          meta.srcip ||
+          meta.source_ip ||
+          meta.src_ip ||
+          alert.srcIp ||
+          alert.srcip ||
+          null
+        )
+      case "dstip":
+      case "destinationIp":
+        return (
+          meta.dstIp ||
+          meta.dstip ||
+          meta.destination_ip ||
+          meta.dst_ip ||
+          alert.dstIp ||
+          alert.dstip ||
+          null
+        )
+      case "responseCode":
+      case "response_code":
+        // Prefer parsed message value (if message contains payload), then fall back to metadata/raw_es
+        try {
+          const parsedVal = extractResponseFromMessage()
+          const norm = normalizeHttpStatus(parsedVal)
+          if (norm) return norm
+        } catch (e) {}
+        // Additional fallbacks (include raw_es.data.id and similar shapes used by Wazuh)
+        const fb = (
+          meta.httpStatusCode ||
+          meta.http_status_code ||
+          meta.status_code ||
+          meta.response_code ||
+          meta.responseCode ||
+          meta.data_id ||
+          alert.data_id ||
+          meta.dataId ||
+          alert.dataId ||
+          meta.raw_es?.http_status_code ||
+          meta.raw_es?.status_code ||
+          meta.raw_es?.response_code ||
+          meta.raw_es?.data_http_status ||
+          meta.raw_es?.data_status ||
+          meta.raw_es?.data?.id ||
+          meta.raw_es?.data_id ||
+          meta.raw_es?.id ||
+          null
+        )
+        return normalizeHttpStatus(fb)
+      case "integration":
+        return alert.integrationName || alert.integration?.name || null
+      case "domainReferer":
+        return (
+          meta.referer || meta.http_referer || meta.domain || meta.url || null
+        )
+      case "severity":
+        return alert.severity || null
+      case "status":
+        return alert.status || null
+      case "sourcePort":
+        return meta.srcPort || meta.src_port || meta.srcport || alert.srcPort || null
+      case "destinationPort":
+        return meta.dstPort || meta.dst_port || meta.dstport || alert.dstPort || null
+      case "protocol":
+        return meta.protocol || meta.http_method || alert.protocol || null
+      case "agentName":
+        return meta.agent?.name || meta.agentName || meta.agent_name || alert.agent?.name || null
+      case "agentIp":
+        return meta.agent?.ip || meta.agentIp || meta.agent_ip || alert.agent?.ip || null
+      case "rule":
+        return meta.rule?.description || meta.ruleDescription || meta.rule_description || alert.rule?.description || null
+      case "mitreTactic":
+        return meta.rule?.mitre?.tactic?.[0] || meta.mitreTactic || null
+      case "mitreId":
+        return meta.rule?.mitre?.id?.[0] || meta.mitreId || null
+      case "tags":
+        return (meta.tags || alert.tags || []).join(", ") || null
+      default:
+        return null
     }
   }
 
@@ -840,6 +1075,7 @@ export default function AlertPanel() {
                       <DateRangePicker
                         from={dateRange?.from}
                         to={dateRange?.to}
+                        allowTime={true}
                         onDateRangeChange={(range) => {
                           setDateRange(range)
                           setTimeout(() => {
@@ -1069,6 +1305,76 @@ export default function AlertPanel() {
                 columns={alertColumns} 
                 onColumnsChange={setAlertColumns}
               />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                disabled={exporting}
+                aria-busy={exporting}
+                onClick={async () => {
+                  setExporting(true)
+                  try {
+                    const params = new URLSearchParams()
+                    if (selectedIntegration) params.append('integrationId', selectedIntegration)
+
+                    // time range
+                    if (useAbsoluteDate && dateRange) {
+                      params.append('from_date', dateRange.from.toISOString())
+                      params.append('to_date', dateRange.to.toISOString())
+                      params.append('time_range', 'custom')
+                    } else {
+                      params.append('time_range', filters.timeRange || '7d')
+                    }
+
+                    if (filters.status && filters.status !== 'all') params.append('status', filters.status)
+                    if (filters.severity && filters.severity !== 'all') params.append('severity', filters.severity)
+                    if (pendingSearchQuery && pendingSearchQuery.trim() !== '') params.append('search', pendingSearchQuery.trim())
+
+                    const visibleCols = alertColumns.filter(c => c.visible).map(c => c.id)
+                    if (visibleCols.length > 0) params.append('columns', visibleCols.join(','))
+
+                    // If client-side filters are present, pass specific alert IDs to guarantee exact match
+                    if (alertFilters && alertFilters.length > 0 && Array.isArray(allFilteredAlerts) && allFilteredAlerts.length > 0) {
+                      const ids = allFilteredAlerts.map(a => a.id).join(',')
+                      params.append('alertIds', ids)
+                    }
+
+                    const res = await fetch(`/api/alerts/export?${params.toString()}`)
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({}))
+                      throw new Error(err?.error || 'Export failed')
+                    }
+                    const blob = await res.blob()
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = 'alerts.xlsx'
+                    document.body.appendChild(a)
+                    a.click()
+                    a.remove()
+                    URL.revokeObjectURL(url)
+                  } catch (e) {
+                    console.error('Export failed', e)
+                    alert('Export failed: ' + (e as any).message)
+                  } finally {
+                    setExporting(false)
+                  }
+                }}
+              >
+                {exporting ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4 mr-2" /> Export
+                  </>
+                )}
+              </Button>
               {selectedAlerts.length > 0 && canUpdateAlert && (
                 <Button
                   variant="default"
@@ -1105,12 +1411,33 @@ export default function AlertPanel() {
                   Add {selectedAlerts.length} Alert{selectedAlerts.length > 1 ? "s" : ""} to Case
                 </Button>
               )}
+              {selectedAlerts.length > 0 && canUpdateAlert && (() => {
+                // Show bulk update when all selected alerts are from Wazuh
+                // (previously required same title; relax to allow bulk ops across different titles)
+                const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
+                const allWazuh = selectedAlertObjs.every(a => a && (a.metadata?.agentId || a.integration?.source?.toLowerCase() === 'wazuh' || a.source?.toLowerCase() === 'wazuh'))
+                if (allWazuh) {
+                  return (
+                    <Button variant="secondary" size="sm" onClick={() => setShowBulkUpdateDialog(true)}>
+                      Bulk Update ({selectedAlerts.length})
+                    </Button>
+                  )
+                }
+                return null
+              })()}
+              
             </div>
           </div>
           <Tabs
             defaultValue="all"
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as AlertStatus | "all")}
+            onValueChange={(value) => {
+              const v = value as AlertStatus | "all"
+              // Only update the active tab for client-side filtering of already-loaded alerts.
+              // Do NOT change server-side sync filters or trigger a reload here.
+              setActiveTab(v)
+              setCurrentPage(1)
+            }}
           >
             <TabsList>
               <TabsTrigger value="all">All</TabsTrigger>
@@ -1156,34 +1483,92 @@ export default function AlertPanel() {
           </div>
         </CardHeader>
         <CardContent>
-          <AlertTable
-            alerts={filteredAlerts}
-            loading={loading}
-            selectedAlerts={selectedAlerts}
-            availableIntegrations={availableIntegrations}
-            canUpdateAlert={canUpdateAlert}
-            columns={alertColumns}
-            onSelectAlert={(checked, alertId) => {
-              if (checked) {
-                setSelectedAlerts([...selectedAlerts, alertId])
-              } else {
-                setSelectedAlerts(selectedAlerts.filter((id) => id !== alertId))
-              }
-            }}
-            onViewDetails={(alert) => {
-              setSelectedAlert(alert)
-              setShowAlertDetailModal(true)
-            }}
-            onUpdateStatus={(alert) => {
-              setSelectedAlert(alert)
-              if (alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to) {
-                setSelectedAssignee(alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to)
-              } else {
-                setSelectedAssignee("")
-              }
-              setShowUpdateStatusDialog(true)
-            }}
-          />
+          {/* Client-side pagination from allFilteredAlerts */}
+          {(() => {
+            // Filter all alerts with exclude filters
+            const filteredBase = applyFilters(allFilteredAlerts)
+
+            // Apply sorting to filteredBase -> filtered (use top-level sort state)
+            let filtered = [...filteredBase]
+            if (sortBy) {
+              filtered.sort((a, b) => {
+                const getVal = (alert: any, colId: string) => {
+                  const meta = alert.metadata || {}
+                  switch (colId) {
+                    case 'timestamp': return new Date(alert.timestamp || alert.created_at).getTime() || 0
+                    case 'title': return (alert.title || meta.rule?.description || alert.description || '').toString()
+                    case 'srcip': return meta.srcIp || meta.srcip || alert.srcIp || alert.srcip || ''
+                    case 'dstip': return meta.dstIp || meta.dstip || alert.dstIp || alert.dstip || ''
+                    case 'responseCode': return meta.data_id || meta.dataId || meta.response_code || meta.status_code || meta.httpStatusCode || ''
+                    case 'integration': return alert.integrationName || alert.integration?.name || ''
+                    case 'severity': return alert.severity || ''
+                    case 'status': return alert.status || ''
+                    default: return ''
+                  }
+                }
+                const va = getVal(a, sortBy)
+                const vb = getVal(b, sortBy)
+                if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * (sortDir === 'asc' ? 1 : -1)
+                return (String(va)).localeCompare(String(vb)) * (sortDir === 'asc' ? 1 : -1)
+              })
+            }
+            
+            // Calculate pagination
+            const totalCount = filtered.length
+            const totalPagesCalc = Math.ceil(totalCount / pageSize) || 1
+            const startIndex = (currentPage - 1) * pageSize
+            const endIndex = startIndex + pageSize
+            const paginatedAlerts = filtered.slice(startIndex, endIndex)
+            
+            // Update pagination info for footer display
+            useEffect(() => {
+              setTotalPages(totalPagesCalc)
+            }, [totalCount, pageSize])
+            
+              return (
+              <AlertTable
+                alerts={paginatedAlerts}
+                loading={loading}
+                selectedAlerts={selectedAlerts}
+                availableIntegrations={availableIntegrations}
+                canUpdateAlert={canUpdateAlert}
+                columns={alertColumns}
+                filters={alertFilters}
+                sortBy={sortBy}
+                sortDir={sortDir}
+                onSortChange={handleSortChange}
+                allVisibleAlertIds={filtered.map(a => a.id)}
+                onAddFilter={handleAddFilter}
+                onRemoveFilter={handleRemoveFilter}
+                onClearFilters={handleClearFilters}
+                onSelectAlert={(checked, alertId) => {
+                  if (checked) {
+                    setSelectedAlerts((prev) => (prev.includes(alertId) ? prev : [...prev, alertId]))
+                  } else {
+                    setSelectedAlerts((prev) => prev.filter((id) => id !== alertId))
+                  }
+                }}
+                onViewDetails={(alert) => {
+                  setSelectedAlert(alert)
+                  setShowAlertDetailModal(true)
+                }}
+                onUpdateStatus={(alert) => {
+                  setSelectedAlert(alert)
+                  if (alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to) {
+                    setSelectedAssignee(alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to)
+                  } else {
+                    setSelectedAssignee("")
+                  }
+                  setShowUpdateStatusDialog(true)
+                }}
+                onDeleteAlert={canDeleteAlert ? (alertId: string) => {
+                  setDeleteMode('single')
+                  setDeleteTargetId(alertId)
+                  setShowDeleteConfirm(true)
+                } : undefined}
+              />
+            )
+          })()}
         </CardContent>
       </Card>
 
@@ -1321,21 +1706,132 @@ export default function AlertPanel() {
         </DialogContent>
       </Dialog>
 
+      {/* Bulk Update Dialog for Wazuh alerts */}
+      <Dialog open={showBulkUpdateDialog} onOpenChange={setShowBulkUpdateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk Update Selected Alerts</DialogTitle>
+            <DialogDescription>
+              Apply status, severity, assignee and notes to all selected Wazuh alerts with the same title.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="status">Status</Label>
+              <Select value={bulkUpdateStatus} onValueChange={(v) => setBulkUpdateStatus(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="New">New</SelectItem>
+                  <SelectItem value="In Progress">In Progress</SelectItem>
+                  <SelectItem value="Ignored">Ignored</SelectItem>
+                  <SelectItem value="Closed">Closed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="severity">Severity</Label>
+              <Select value={bulkUpdateSeverity || ""} onValueChange={(v) => setBulkUpdateSeverity(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Low">Low</SelectItem>
+                  <SelectItem value="Medium">Medium</SelectItem>
+                  <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="Critical">Critical</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="assign">Assign To</Label>
+              <Select value={bulkUpdateAssignee || ""} onValueChange={(v) => setBulkUpdateAssignee(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {appUsers.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="comments">Comments</Label>
+              <Textarea value={bulkUpdateComments} onChange={(e) => setBulkUpdateComments(e.target.value)} />
+            </div>
+
+            <div className="border-t pt-4 mt-4">
+              <h3 className="text-sm font-semibold mb-3">Analysis (Local Only)</h3>
+              <div className="space-y-2">
+                <Label>Severity Based on Analysis</Label>
+                <Select value={bulkSeverityBasedOnAnalysis || ""} onValueChange={(v) => setBulkSeverityBasedOnAnalysis(v)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Low">Low</SelectItem>
+                    <SelectItem value="Medium">Medium</SelectItem>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Critical">Critical</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Analysis Notes</Label>
+                <Textarea value={bulkAnalysisNotes} onChange={(e) => setBulkAnalysisNotes(e.target.value)} className="h-20" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkUpdateDialog(false)}>Cancel</Button>
+            <Button onClick={async () => {
+              try {
+                const body = {
+                  alertIds: selectedAlerts,
+                  status: bulkUpdateStatus,
+                  severity: bulkUpdateSeverity,
+                  assignee: bulkUpdateAssignee,
+                  comments: bulkUpdateComments,
+                  severityBasedOnAnalysis: bulkSeverityBasedOnAnalysis,
+                  analysisNotes: bulkAnalysisNotes,
+                }
+                const res = await fetch('/api/alerts/bulk-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+                const data = await res.json()
+                if (!res.ok) throw new Error(data?.error || 'Bulk update failed')
+                // Refresh alerts
+                await loadAlerts(currentPage, pageSize)
+                await loadAllFilteredAlerts()
+                setSelectedAlerts([])
+                setShowBulkUpdateDialog(false)
+              } catch (err) {
+                console.error('Bulk update error', err)
+                alert('Bulk update failed: ' + (err as any).message)
+              }
+            }}>Apply to Selected</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Pagination Controls */}
-      {!loading && filteredAlerts.length > 0 && totalPages > 1 && (
+      {!loading && allFilteredAlerts.length > 0 && totalPages > 1 && (
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <span className="text-sm text-muted-foreground">
-                  Page {currentPage} of {totalPages} | Total Alerts: {paginationData?.total || 0}
+                  Page {currentPage} of {totalPages} | Total Alerts: {allFilteredAlerts.length}
                 </span>
                 <div className="flex items-center gap-2">
                   <Label htmlFor="page-size" className="text-sm">Items per page:</Label>
                   <Select value={pageSize.toString()} onValueChange={(v) => {
                     setPageSize(parseInt(v))
                     setCurrentPage(1)
-                    loadAlerts(1, parseInt(v))
                   }}>
                     <SelectTrigger className="w-24">
                       <SelectValue />
@@ -1356,7 +1852,6 @@ export default function AlertPanel() {
                   onClick={() => {
                     const newPage = currentPage - 1
                     setCurrentPage(newPage)
-                    loadAlerts(newPage, pageSize)
                   }}
                   disabled={currentPage === 1}
                 >
@@ -1368,7 +1863,6 @@ export default function AlertPanel() {
                   onClick={() => {
                     const newPage = currentPage + 1
                     setCurrentPage(newPage)
-                    loadAlerts(newPage, pageSize)
                   }}
                   disabled={currentPage === totalPages}
                 >
@@ -1533,11 +2027,26 @@ export default function AlertPanel() {
           selectedAlert.integration?.name?.toLowerCase().includes("qradar")
 
         if (isWazuh) {
+          const enriched = selectedAlert
+            ? ({
+                ...selectedAlert,
+                metadata: Object.assign({}, selectedAlert.metadata || {},
+                  // copy top-level hash fields into metadata so Wazuh dialog can find them
+                  selectedAlert.hash_sha256 ? { hash_sha256: selectedAlert.hash_sha256 } : {},
+                  selectedAlert.sha256 ? { sha256: selectedAlert.sha256 } : {},
+                  selectedAlert.sacti_search ? { sacti_search: selectedAlert.sacti_search } : {},
+                  selectedAlert.data_win_eventdata_hashes ? { data_win_eventdata_hashes: selectedAlert.data_win_eventdata_hashes } : {},
+                  selectedAlert.md5 ? { md5: selectedAlert.md5 } : {},
+                  selectedAlert.sha1 ? { sha1: selectedAlert.sha1 } : {}
+                )
+              } as any)
+            : selectedAlert
+
           return (
             <WazuhAlertDetailDialog
               open={showAlertDetailModal}
               onOpenChange={setShowAlertDetailModal}
-              alert={selectedAlert}
+              alert={enriched}
             />
           )
         } else if (isQRadar) {
@@ -1564,6 +2073,19 @@ export default function AlertPanel() {
           )
         }
       })()}
+              {selectedAlerts.length > 0 && canDeleteAlert && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    setDeleteMode('bulk')
+                    setDeleteTargetIds(selectedAlerts)
+                    setShowDeleteConfirm(true)
+                  }}
+                >
+                  Delete Selected ({selectedAlerts.length})
+                </Button>
+              )}
 
       {/* Add to Case Dialog - untuk non-Wazuh alerts */}
       {selectedAlerts.length > 0 && (
@@ -1578,6 +2100,59 @@ export default function AlertPanel() {
           }}
         />
       )}
+
+        {/* Delete Confirmation Dialog (single or bulk) */}
+        <Dialog open={showDeleteConfirm} onOpenChange={(open) => { if (!open) { setShowDeleteConfirm(false); setDeleteMode(null); setDeleteTargetId(null); setDeleteTargetIds([]) } }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirm Delete</DialogTitle>
+              <DialogDescription>
+                {deleteMode === 'bulk' ? (
+                  <>Delete {deleteTargetIds.length} selected alerts? This action is irreversible.</>
+                ) : (
+                  <>Delete this alert? This action is irreversible.</>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="pt-4">
+              <div className="flex gap-2 justify-end">
+                <Button variant="ghost" onClick={() => setShowDeleteConfirm(false)} disabled={isDeleting}>Cancel</Button>
+                <Button
+                  variant="destructive"
+                  onClick={async () => {
+                    try {
+                      setIsDeleting(true)
+                      if (deleteMode === 'bulk') {
+                        const res = await fetch('/api/alerts/bulk-delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alertIds: deleteTargetIds }) })
+                        const data = await res.json()
+                        if (!res.ok) throw new Error(data?.error || 'Bulk delete failed')
+                        setSelectedAlerts([])
+                      } else if (deleteMode === 'single' && deleteTargetId) {
+                        const res = await fetch(`/api/alerts/${encodeURIComponent(deleteTargetId)}`, { method: 'DELETE' })
+                        const data = await res.json()
+                        if (!res.ok) throw new Error(data?.error || 'Delete failed')
+                        setSelectedAlerts((prev) => prev.filter((id) => id !== deleteTargetId))
+                      }
+
+                      // Refresh
+                      await loadAlerts(currentPage, pageSize)
+                      await loadAllFilteredAlerts()
+                      setShowDeleteConfirm(false)
+                    } catch (err) {
+                      console.error('Delete error', err)
+                      alert('Delete failed: ' + (err as any).message)
+                    } finally {
+                      setIsDeleting(false)
+                    }
+                  }}
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? 'Deleting...' : 'Delete'}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
       {/* Wazuh Add to Case Dialog */}
       <WazuhAddToCaseDialog

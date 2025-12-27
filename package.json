@@ -10,7 +10,8 @@
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
-    "ts-node": "ts-node"
+    "ts-node": "ts-node",
+    "sync-stellar-custom": "ts-node scripts/sync-stellar-cyber-alerts-custom.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -74,6 +75,7 @@
     "undici": "7.16.0",
     "uuid": "13.0.0",
     "vaul": "^0.9.9",
+    "exceljs": "^4.3.0",
     "zod": "3.25.76",
     "zustand": "5.0.8"
   },
@@ -85,6 +87,6 @@
     "prisma": "^6.2.1",
     "tailwindcss": "^3.4.17",
     "ts-node": "^10.9.2",
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   }
 }

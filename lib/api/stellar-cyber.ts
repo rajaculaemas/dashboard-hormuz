@@ -269,8 +269,12 @@ export async function getAlerts(params: {
   page?: number
   integrationId?: string
   daysBack?: number  // Allow custom time range (default 7 days)
+  // Optional explicit time range (ISO strings). If provided, these take precedence
+  // over `daysBack` and allow hour-granular ranges.
+  startTime?: string
+  endTime?: string
 }): Promise<StellarCyberAlert[]> {
-  const { minScore = 0, status, sort = "timestamp", order = "desc", limit = 100, page = 1, integrationId, daysBack = 7 } = params
+  const { minScore = 0, status, sort = "timestamp", order = "desc", limit = 100, page = 1, integrationId, daysBack = 7, startTime, endTime } = params
   const { HOST, TENANT_ID } = await getStellarCyberCredentials(integrationId)
 
   if (!HOST || !TENANT_ID) {
@@ -301,13 +305,25 @@ export async function getAlerts(params: {
       mustClauses.push(`score:>=${minScore}`)
     }
 
-    // Date range filter (configurable days back, default 7 days in UTC+7)
-    const now = new Date()
-    const tzOffset = 7 * 60 * 60 * 1000 // UTC+7
-    const localTime = new Date(now.getTime() + tzOffset)
-    const startDate = new Date(localTime.getTime() - daysBack * 24 * 60 * 60 * 1000) // N days ago
+    // Date range filter. Prefer explicit `startTime`/`endTime` (ISO strings)
+    // so callers can request hour-granular ranges. If not provided, fallback
+    // to `daysBack` behavior (default 7 days) using UTC+7 local window for
+    // compatibility with previous behavior.
+    let startDate: Date
+    let endDate: Date
 
-    mustClauses.push(`timestamp:[${startDate.toISOString()} TO ${localTime.toISOString()}]`)
+    if (startTime || endTime) {
+      endDate = endTime ? new Date(endTime) : new Date()
+      startDate = startTime ? new Date(startTime) : new Date(endDate.getTime() - daysBack * 24 * 60 * 60 * 1000)
+    } else {
+      const now = new Date()
+      const tzOffset = 7 * 60 * 60 * 1000 // UTC+7
+      const localTime = new Date(now.getTime() + tzOffset)
+      startDate = new Date(localTime.getTime() - daysBack * 24 * 60 * 60 * 1000)
+      endDate = localTime
+    }
+
+    mustClauses.push(`timestamp:[${startDate.toISOString()} TO ${endDate.toISOString()}]`)
 
     queryParams.q = mustClauses.join(" AND ")
 

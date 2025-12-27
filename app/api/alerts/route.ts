@@ -58,30 +58,44 @@ export async function GET(request: NextRequest) {
 
     // If absolute date range provided, use it
     if (fromDate && toDate) {
-      // fromDate and toDate are user's local dates (YYYY-MM-DD) in UTC+7 timezone
-      // We need to convert these to UTC for database query
-      const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
-      
-      // Create UTC midnight times first
-      const fromUTC = new Date(fromDate + 'T00:00:00Z')
-      const toUTC = new Date(toDate + 'T00:00:00Z')
-      
-      // Subtract 7 hours to get the actual UTC time when that local date starts
-      // Example: "2025-12-09" in UTC+7 starts at "2025-12-08T17:00:00Z"
-      startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
-      
-      // For end date, we want the last second of that date in UTC+7
-      // Which is 7 hours before the start of the next day in UTC+7
-      // Example: "2025-12-16" in UTC+7 ends at "2025-12-16T16:59:59Z"
-      const nextDayUTC = new Date(toUTC.getTime() + 24 * 60 * 60 * 1000)
-      endDate = new Date(nextDayUTC.getTime() - UTC_PLUS_7_OFFSET_MS - 1)
-      
-      console.log("Using absolute date range (UTC+7):", {
-        rawFromDate: fromDate,
-        rawToDate: toDate,
-        startDateUTC: startDate.toISOString(),
-        endDateUTC: endDate.toISOString(),
-      })
+      // If client sent full ISO datetimes (contains 'T'), parse them directly
+      // so hour/minute precision is preserved. Otherwise fall back to the
+      // existing date-only handling (assumes YYYY-MM-DD in user's local TZ).
+      if (fromDate.includes("T") || toDate.includes("T")) {
+        startDate = new Date(fromDate)
+        endDate = new Date(toDate)
+        console.log("Using absolute datetime range (ISO):", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          startDateUTC: startDate.toISOString(),
+          endDateUTC: endDate.toISOString(),
+        })
+      } else {
+        // fromDate and toDate are user's local dates (YYYY-MM-DD) in UTC+7 timezone
+        // We need to convert these to UTC for database query
+        const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
+
+        // Create UTC midnight times first
+        const fromUTC = new Date(fromDate + 'T00:00:00Z')
+        const toUTC = new Date(toDate + 'T00:00:00Z')
+
+        // Subtract 7 hours to get the actual UTC time when that local date starts
+        // Example: "2025-12-09" in UTC+7 starts at "2025-12-08T17:00:00Z"
+        startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+
+        // For end date, we want the last second of that date in UTC+7
+        // Which is 7 hours before the start of the next day in UTC+7
+        // Example: "2025-12-16" in UTC+7 ends at "2025-12-16T16:59:59Z"
+        const nextDayUTC = new Date(toUTC.getTime() + 24 * 60 * 60 * 1000)
+        endDate = new Date(nextDayUTC.getTime() - UTC_PLUS_7_OFFSET_MS - 1)
+
+        console.log("Using absolute date range (UTC+7):", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          startDateUTC: startDate.toISOString(),
+          endDateUTC: endDate.toISOString(),
+        })
+      }
     } else {
       // Otherwise use relative time range
       switch (timeRange) {

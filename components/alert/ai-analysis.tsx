@@ -75,9 +75,9 @@ export function AiAnalysis({ getPayload, buttonLabel = "AI Analysis" }: AiAnalys
             ))}
         </div>
         {answer ? (
-          <pre className="whitespace-pre-wrap text-sm bg-gray-50 p-2 rounded">{answer}</pre>
+          <pre className="whitespace-pre-wrap text-sm bg-gray-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded">{answer}</pre>
         ) : (
-          <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(parsed, null, 2)}</pre>
+          <pre className="whitespace-pre-wrap text-xs bg-transparent dark:bg-transparent">{JSON.stringify(parsed, null, 2)}</pre>
         )}
       </div>
     )
@@ -171,7 +171,8 @@ export function AiAnalysis({ getPayload, buttonLabel = "AI Analysis" }: AiAnalys
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="bg-white p-4 rounded shadow-lg max-w-3xl w-full max-h-[70vh] overflow-auto">
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="relative bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 p-4 rounded shadow-lg max-w-3xl w-full max-h-[70vh] overflow-auto z-10">
             <div className="flex justify-between items-center mb-2">
               <h3 className="font-medium">AI Analysis Result</h3>
               <div className="text-xs text-muted-foreground ml-4">

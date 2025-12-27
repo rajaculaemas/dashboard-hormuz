@@ -25,12 +25,16 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
   // Log for debugging
   console.log('[WazuhAlertDetailDialog] Alert object:', alert)
   console.log('[WazuhAlertDetailDialog] Alert metadata keys:', Object.keys(alert.metadata || {}))
+  console.log('[WazuhAlertDetailDialog] Alert top-level keys:', Object.keys(alert || {}))
 
   // Use metadata which contains all the flat fields we parsed
   const metadata = alert.metadata || {}
   const rule = alert.rule || {}
   const agent = alert.agent || {}
   const manager = alert.manager || {}
+
+  console.log('[WazuhAlertDetailDialog] metadata.raw_es keys:', Object.keys(metadata.raw_es || {}))
+  console.log('[WazuhAlertDetailDialog] metadata.raw_es.data keys:', Object.keys((metadata.raw_es && (metadata.raw_es.data || {})) || {}))
   
   // Parse the message field which contains full Wazuh data (for optional extended details)
   let parsedData: any = {}
@@ -41,18 +45,26 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
       // Silent fallback
     }
   }
+  // Fallback: some alerts include the full payload at top-level `alert.message` or `alert.msg`
+  if ((!parsedData || Object.keys(parsedData).length === 0) && alert && typeof alert.message === "string") {
+    try {
+      parsedData = JSON.parse(alert.message)
+    } catch (e) {
+      // leave parsedData as-is
+    }
+  }
   
   // Extract all the flat metadata fields
-  const ruleId = metadata.ruleId || rule.id || ""
-  const ruleLevel = metadata.ruleLevel || rule.level || 0
-  const ruleDescription = metadata.ruleDescription || rule.description || alert.title || ""
+  const ruleId = metadata.ruleId || metadata.raw_es?.rule_id || rule.id || ""
+  const ruleLevel = metadata.ruleLevel || metadata.raw_es?.rule_level || rule.level || 0
+  const ruleDescription = metadata.ruleDescription || metadata.raw_es?.rule_description || rule.description || alert.title || ""
   const ruleGroups = metadata.ruleGroups || rule.groups || []
   const ruleFiredTimes = metadata.ruleFiredTimes || 0
   
-  const agentId = metadata.agentId || agent.id || ""
-  const agentName = metadata.agentName || agent.name || ""
-  const agentIp = metadata.agentIp || agent.ip || ""
-  const agentLabels = metadata.agentLabels || agent.labels || {}
+  const agentId = metadata.agentId || metadata.raw_es?.agent_id || agent.id || ""
+  const agentName = metadata.agentName || metadata.raw_es?.agent_name || agent.name || ""
+  const agentIp = metadata.agentIp || metadata.raw_es?.agent_ip || agent.ip || ""
+  const agentLabels = metadata.agentLabels || metadata.raw_es?.agent_labels || agent.labels || {}
   
   const managerId = metadata.managerId || manager.name || ""
   const clusterName = metadata.clusterName || ""
@@ -107,15 +119,130 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
     parsedData.data?.columns?.id ||
     metadata.dataId ||
     metadata.data_id ||
+    // Accept top-level alert fields when metadata was not populated
+    alert.dataId ||
+    alert.data_id ||
+    // Try raw ES _source if present (various shapes)
+    metadata.raw_es?.data_id ||
+    metadata.raw_es?.data?.id ||
+    metadata.raw_es?.id ||
+    // Some shapes include HTTP response under parsedData.data.http.response
+    parsedData.data?.http?.response?.status_code ||
+    parsedData.data?.http?.response?.status ||
+    // Also check raw_es http response shapes
+    metadata.raw_es?.http?.response?.status_code ||
+    metadata.raw_es?.http?.response?.status ||
     ""
+
+  // Additional network-related fields requested for display
+  const remip =
+    parsedData.data?.remip ||
+    parsedData.data?.columns?.remote_address ||
+    metadata.data_columns_remote_address ||
+    // Check raw ES source (stored by wazuh-client as metadata.raw_es)
+    (metadata.raw_es && metadata.raw_es.remip) ||
+    metadata.remip ||
+    metadata.remote_ip ||
+    metadata.remote_address ||
+    ""
+
+  const remipCountryCode =
+    parsedData.data?.remip_country_code ||
+    // raw_es may contain vendor country code
+    (metadata.raw_es && metadata.raw_es.remip_country_code) ||
+    metadata.data_columns_remip_country_code ||
+    metadata.remip_country_code ||
+    metadata.remipCountryCode ||
+    metadata.remote_country ||
+    metadata.data_columns_remote_country ||
+    ""
+
+  const remoteUser =
+    parsedData.data?.user ||
+    parsedData.data?.columns?.user ||
+    parsedData.data?.columns?.username ||
+    metadata.data_columns_user ||
+    // Prefer raw ES user field if available
+    (metadata.raw_es && metadata.raw_es.user) ||
+    metadata.user ||
+    metadata.username ||
+    metadata.user_name ||
+    ""
+
+  // Prefer command line from multiple possible locations (osquery/wazuh shapes)
+  const processCmdLine =
+    parsedData.data?.columns?.cmdline ||
+    parsedData.data?.cmdline ||
+    metadata.data_columns_cmdline ||
+    // Check raw_es (original ES source) for common locations
+    metadata.raw_es?.data?.columns?.cmdline ||
+    metadata.raw_es?.process_cmd_line ||
+    metadata.raw_es?.process_cmdline ||
+    metadata.process_cmd_line ||
+    metadata.process_cmdline ||
+    metadata.processCmdLine ||
+    // Some alert shapes put the field at the top-level (not under metadata)
+    alert.process_cmd_line ||
+    alert.process_cmdline ||
+    alert.processCmdLine ||
+    ""
+
+  // Debug: expose all candidate locations for the command line to help root-cause missing displays
+  const processCmdLineCandidates = {
+    parsed_columns_cmdline: parsedData.data?.columns?.cmdline,
+    parsed_cmdline: parsedData.data?.cmdline,
+    metadata_data_columns_cmdline: metadata.data_columns_cmdline,
+    metadata_raw_es_data_columns_cmdline: metadata.raw_es?.data?.columns?.cmdline,
+    metadata_raw_es_process_cmd_line: metadata.raw_es?.process_cmd_line,
+    metadata_raw_es_process_cmdline: metadata.raw_es?.process_cmdline,
+    metadata_process_cmd_line: metadata.process_cmd_line,
+    metadata_process_cmdline: metadata.process_cmdline,
+    metadata_processCmdLine: metadata.processCmdLine,
+    alert_root_process_cmd_line: alert.process_cmd_line,
+    alert_root_process_cmdline: alert.process_cmdline,
+    alert_root_processCmdLine: alert.processCmdLine,
+  }
+
+  console.log('[WazuhAlertDetailDialog] processCmdLineCandidates:', processCmdLineCandidates)
+  console.log('[WazuhAlertDetailDialog] resolved processCmdLine:', processCmdLine)
   
   // Web request fields (from metadata added by wazuh-client.ts)
   const urlRaw = metadata.url || parsedData.data?.url || ""
   const url = typeof urlRaw === "object" && urlRaw?.full ? urlRaw.full : (typeof urlRaw === "string" ? urlRaw : "")
   const httpMethod = metadata.httpMethod || parsedData.data?.protocol || ""
-  const httpStatusCode = metadata.httpStatusCode || metadata.data_id || metadata.dataId || parsedData.data?.id || ""
+  const httpStatusCode =
+    metadata.httpStatusCode ||
+    metadata.data_id ||
+    metadata.dataId ||
+    // Fallbacks: parsed message, top-level alert fields, or raw ES
+    parsedData.data?.id ||
+    parsedData.data?.http?.response?.status_code ||
+    parsedData.data?.http?.response?.status ||
+    alert.data_id ||
+    alert.dataId ||
+    // Try raw_es-shaped fields
+    metadata.raw_es?.data_id ||
+    metadata.raw_es?.data?.id ||
+    metadata.raw_es?.id ||
+    metadata.raw_es?.http?.response?.status_code ||
+    metadata.raw_es?.http?.response?.status ||
+    ""
+
+  console.log('[WazuhAlertDetailDialog] resolved dataId / httpStatusCode:', { dataId, httpStatusCode, "metadata_keys": Object.keys(metadata || {}), "raw_es_keys": Object.keys(metadata.raw_es || {}) })
   const userAgent = metadata.userAgent || parsedData.data?.user_agent || ""
   
+  // Helper: determine whether a candidate value looks like an HTTP status code
+  const looksLikeHttpStatus = (v: any) => {
+    if (v === undefined || v === null) return false
+    const s = String(v).trim()
+    // common: numeric '200' or '200 OK' or 200.0
+    const m = s.match(/^\s*(\d{3})\b/)
+    if (m && m[1]) {
+      const n = parseInt(m[1], 10)
+      return n >= 100 && n <= 599
+    }
+    return false
+  }
   // Only show network info if data comes from raw Wazuh data (parsedData), not from metadata defaults
   const hasRealNetworkData = !!(
     parsedData.data?.win?.eventdata?.sourceIp ||
@@ -130,7 +257,10 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
     metadata.dstIp ||
     srcIp ||
     dstIp ||
-    url // Also show if we have web request data
+    url || // Also show if we have web request data
+    remip ||
+    remipCountryCode ||
+    remoteUser
   )
   
   const mitreTactic = metadata.mitreTactic || parsedData.rule?.mitre?.tactic?.[0]
@@ -190,18 +320,112 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
   const md5Hash = String(syscheck.md5_after || "").trim()
   const sha1Hash = String(syscheck.sha1_after || "").trim()
   const sha256Hash = String(syscheck.sha256_after || "").trim()
+
+  // Additionally extract hashes from Sysmon / eventdata or other metadata shapes
+  const winEventHashesRaw =
+    parsedData.data?.win?.eventdata?.hashes ||
+    parsedData.data?.win?.eventdata?.hash ||
+    metadata.data_win_eventdata_hashes ||
+    metadata.hashes ||
+    metadata.hash_sha256 ||
+    metadata.sacti_search ||
+    // Fallback to top-level alert fields (some alert payloads store hashes at root)
+    alert.data_win_eventdata_hashes ||
+    alert.hashes ||
+    alert.hash_sha256 ||
+    alert.sacti_search ||
+    alert.sha256 ||
+    ""
+
+  const parseHashesFromString = (s: string) => {
+    if (!s || typeof s !== 'string') return {}
+    const out: any = {}
+    const parts = s.split(/[,;|\s]+/)
+    for (const part of parts) {
+      const mSha256 = part.match(/SHA256=([A-Fa-f0-9]{32,})/)
+      const mSha1 = part.match(/SHA1=([A-Fa-f0-9]{32,})/)
+      const mMd5 = part.match(/MD5=([A-Fa-f0-9]{16,})/)
+      if (mSha256) out.sha256 = mSha256[1]
+      if (mSha1) out.sha1 = mSha1[1]
+      if (mMd5) out.md5 = mMd5[1]
+      // also accept plain hex tokens
+      const hex = part.replace(/[^A-Fa-f0-9]/g, '')
+      if (!out.sha256 && hex.length === 64) out.sha256 = hex
+      if (!out.sha1 && hex.length === 40) out.sha1 = hex
+      if (!out.md5 && hex.length === 32) out.md5 = hex
+    }
+    return out
+  }
+
+  const winHashes = parseHashesFromString(String(winEventHashesRaw))
+
+  const finalMd5 = md5Hash || winHashes.md5 || metadata.hash_md5 || alert.hash_md5 || alert.md5 || ""
+  const finalSha1 = sha1Hash || winHashes.sha1 || metadata.hash_sha1 || alert.hash_sha1 || alert.sha1 || ""
+  const finalSha256 =
+    sha256Hash ||
+    winHashes.sha256 ||
+    (metadata.hash_sha256 && String(metadata.hash_sha256).replace(/^SHA256=/i, '')) ||
+    // Fallbacks for top-level alert fields
+    (alert.hash_sha256 && String(alert.hash_sha256).replace(/^SHA256=/i, '')) ||
+    (alert.sha256 && String(alert.sha256)) ||
+    (alert.sacti_search && String(alert.sacti_search)) ||
+    ""
+
+  // Deep-search fallback: scan entire alert object for hash-looking tokens
+  const collectHashesFromObject = (obj: any) => {
+    const out: any = { md5: "", sha1: "", sha256: "" }
+    const seen = new WeakSet()
+    const hexRegex = /\b([A-Fa-f0-9]{32,64})\b/g
+
+    const visit = (v: any) => {
+      if (!v || typeof v === 'number' || typeof v === 'boolean') return
+      if (typeof v === 'string') {
+        // Extract explicit key=value patterns first
+        const mSha256 = v.match(/SHA256=([A-Fa-f0-9]{64})/i)
+        const mSha1 = v.match(/SHA1=([A-Fa-f0-9]{40})/i)
+        const mMd5 = v.match(/MD5=([A-Fa-f0-9]{32})/i)
+        if (mSha256 && !out.sha256) out.sha256 = mSha256[1]
+        if (mSha1 && !out.sha1) out.sha1 = mSha1[1]
+        if (mMd5 && !out.md5) out.md5 = mMd5[1]
+
+        // plain hex tokens
+        let match
+        while ((match = hexRegex.exec(v)) !== null) {
+          const hex = match[1]
+          if (!out.sha256 && hex.length === 64) out.sha256 = hex
+          if (!out.sha1 && hex.length === 40) out.sha1 = hex
+          if (!out.md5 && hex.length === 32) out.md5 = hex
+        }
+        return
+      }
+      if (typeof v === 'object') {
+        if (seen.has(v)) return
+        seen.add(v)
+        if (Array.isArray(v)) return v.forEach(visit)
+        for (const k of Object.keys(v)) visit(v[k])
+      }
+    }
+
+    visit(obj)
+    return out
+  }
+
+  const deepHashes = collectHashesFromObject(alert)
+  const finalMd5Resolved = finalMd5 || deepHashes.md5 || ""
+  const finalSha1Resolved = finalSha1 || deepHashes.sha1 || ""
+  const finalSha256Resolved = finalSha256 || deepHashes.sha256 || ""
   
   console.log('[WazuhAlertDetailDialog] Syscheck object:', syscheck)
   console.log('[WazuhAlertDetailDialog] Hash values extracted:', { 
-    md5Hash: md5Hash ? `"${md5Hash.substring(0, 20)}..."` : "EMPTY", 
-    sha1Hash: sha1Hash ? `"${sha1Hash.substring(0, 20)}..."` : "EMPTY",
-    sha256Hash: sha256Hash ? `"${sha256Hash.substring(0, 20)}..."` : "EMPTY"
+    md5Hash: finalMd5Resolved ? `"${String(finalMd5Resolved).substring(0, 20)}..."` : "EMPTY", 
+    sha1Hash: finalSha1Resolved ? `"${String(finalSha1Resolved).substring(0, 20)}..."` : "EMPTY",
+    sha256Hash: finalSha256Resolved ? `"${String(finalSha256Resolved).substring(0, 20)}..."` : "EMPTY"
   })
   console.log('[WazuhAlertDetailDialog] Boolean checks:', {
-    hasMd5: !!md5Hash,
-    hasSha1: !!sha1Hash,
-    hasSha256: !!sha256Hash,
-    anyHash: !!(md5Hash || sha1Hash || sha256Hash)
+    hasMd5: !!finalMd5Resolved,
+    hasSha1: !!finalSha1Resolved,
+    hasSha256: !!finalSha256Resolved,
+    anyHash: !!(finalMd5Resolved || finalSha1Resolved || finalSha256Resolved)
   })
 
   const [timelineEvents, setTimelineEvents] = useState<any[]>([])
@@ -728,6 +952,29 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                         </div>
                       </div>
                     )}
+                    {remip && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Remote IP</label>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-mono">{remip}</p>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleCheckIpReputation(remip)}
+                          >
+                            <ShieldCheck className="h-3 w-3 mr-1" />
+                            Check
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {remipCountryCode && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Remote Country</label>
+                        <p className="text-sm">{remipCountryCode}</p>
+                      </div>
+                    )}
                     {srcPort && (
                       <div>
                         <label className="text-sm font-medium text-muted-foreground">Source Port</label>
@@ -746,10 +993,10 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                         <p className="text-sm">{protocol}</p>
                       </div>
                     )}
-                    {dataId && (
+                    {looksLikeHttpStatus(httpStatusCode) && (
                       <div>
                         <label className="text-sm font-medium text-muted-foreground">Response Code</label>
-                        <p className="text-sm font-mono">{dataId}</p>
+                        <p className="text-sm font-mono">{httpStatusCode}</p>
                       </div>
                     )}
                     {url && (
@@ -770,6 +1017,18 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                         <p className="text-sm break-all text-muted-foreground">{userAgent}</p>
                       </div>
                     )}
+                    {processCmdLine && (
+                      <div className="col-span-2">
+                        <label className="text-sm font-medium text-muted-foreground">Command Line</label>
+                        <p className="text-sm break-all font-mono">{processCmdLine}</p>
+                      </div>
+                    )}
+                    {remoteUser && (
+                      <div className="col-span-2">
+                        <label className="text-sm font-medium text-muted-foreground">User</label>
+                        <p className="text-sm">{remoteUser}</p>
+                      </div>
+                    )}
                     {domain && (
                       <div className="col-span-2">
                         <label className="text-sm font-medium text-muted-foreground">Domain (Referer)</label>
@@ -783,8 +1042,8 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
               </Card>
             )}
 
-            {/* File Monitoring (Syscheck) */}
-            {Object.keys(syscheck).length > 0 && (
+            {/* File Monitoring (Syscheck / Sysmon hashes) */}
+            {(Object.keys(syscheck).length > 0 || finalMd5Resolved || finalSha1Resolved || finalSha256Resolved || parsedData.data?.win?.eventdata?.image || parsedData.data?.win?.eventdata?.imageLoaded) && (
               <Card className="w-full">
                 <CardHeader>
                   <CardTitle className="text-base">File Monitoring</CardTitle>
@@ -794,6 +1053,14 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">File Path</label>
                       <p className="text-sm font-mono break-all">{syscheck.path}</p>
+                    </div>
+                  )}
+
+                  {/* Windows / Sysmon image fields */}
+                  {(parsedData.data?.win?.eventdata?.image || parsedData.data?.win?.eventdata?.imageLoaded || metadata.data_win_eventdata_image || metadata.data_win_eventdata_imageLoaded) && (
+                    <div>
+                      <label className="text-sm font-medium text-muted-foreground">Image / Loaded</label>
+                      <p className="text-sm font-mono break-all">{parsedData.data?.win?.eventdata?.image || parsedData.data?.win?.eventdata?.imageLoaded || metadata.data_win_eventdata_image || metadata.data_win_eventdata_imageLoaded}</p>
                     </div>
                   )}
                   {syscheck.event && (
@@ -826,16 +1093,16 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                       <p className="text-sm">{syscheck.gname_after}</p>
                     </div>
                   )}
-                  {syscheck.md5_after && (
+                  {finalMd5Resolved && (
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">MD5</label>
                       <div className="mt-1 space-y-1">
-                        <p className="font-mono text-sm break-all">{syscheck.md5_after}</p>
+                        <p className="font-mono text-sm break-all">{finalMd5Resolved}</p>
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-6 px-2 text-[11px]"
-                          onClick={() => handleCheckHashReputation(syscheck.md5_after, "MD5")}
+                          onClick={() => handleCheckHashReputation(finalMd5Resolved, "MD5")}
                         >
                           <ShieldCheck className="h-3 w-3 mr-1" />
                           Check
@@ -843,16 +1110,16 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                       </div>
                     </div>
                   )}
-                  {syscheck.sha1_after && (
+                  {finalSha1Resolved && (
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">SHA1</label>
                       <div className="mt-1 space-y-1">
-                        <p className="font-mono text-sm break-all">{syscheck.sha1_after}</p>
+                        <p className="font-mono text-sm break-all">{finalSha1Resolved}</p>
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-6 px-2 text-[11px]"
-                          onClick={() => handleCheckHashReputation(syscheck.sha1_after, "SHA1")}
+                          onClick={() => handleCheckHashReputation(finalSha1Resolved, "SHA1")}
                         >
                           <ShieldCheck className="h-3 w-3 mr-1" />
                           Check
@@ -860,16 +1127,16 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                       </div>
                     </div>
                   )}
-                  {syscheck.sha256_after && (
+                  {finalSha256Resolved && (
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">SHA256</label>
                       <div className="mt-1 space-y-1">
-                        <p className="font-mono text-sm break-all">{syscheck.sha256_after}</p>
+                        <p className="font-mono text-sm break-all">{finalSha256Resolved}</p>
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-6 px-2 text-[11px]"
-                          onClick={() => handleCheckHashReputation(syscheck.sha256_after, "SHA256")}
+                          onClick={() => handleCheckHashReputation(finalSha256Resolved, "SHA256")}
                         >
                           <ShieldCheck className="h-3 w-3 mr-1" />
                           Check

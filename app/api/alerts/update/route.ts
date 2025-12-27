@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
     
     const body = await request.json()
-    const { alertId, status, severity, comments, assignee } = body
+    const { alertId, status, severity, comments, assignee, severityBasedOnAnalysis, analysisNotes } = body
 
     if (!alertId || !status) {
       return NextResponse.json({ error: "Missing required fields: alertId or status" }, { status: 400 })
@@ -73,6 +73,8 @@ export async function POST(request: NextRequest) {
         metadata: {
           ...(typeof alert.metadata === "object" && alert.metadata !== null ? alert.metadata : {}),
           assignee,
+          ...(severityBasedOnAnalysis ? { severityBasedOnAnalysis } : {}),
+          ...(analysisNotes ? { analysisNotes } : {}),
           statusUpdatedAt: new Date().toISOString(),
         },
         updatedAt: new Date(),
@@ -118,6 +120,17 @@ export async function POST(request: NextRequest) {
         timestamp: new Date(),
       })
     }
+
+      if (analysisNotes) {
+        timelineEvents.push({
+          alertId,
+          eventType: "analysis_note",
+          description: analysisNotes,
+          changedBy: user.name || user.email || "System",
+          changedByUserId: user.id,
+          timestamp: new Date(),
+        })
+      }
 
     if (timelineEvents.length > 0) {
       await prisma.alertTimeline.createMany({ data: timelineEvents })

@@ -15,6 +15,7 @@ interface DateRangePickerProps {
   onDateRangeChange?: (range: { from: Date; to: Date }) => void
   placeholder?: string
   className?: string
+  allowTime?: boolean
 }
 
 export function DateRangePicker({
@@ -23,12 +24,21 @@ export function DateRangePicker({
   onDateRangeChange,
   placeholder = "Pick a date range",
   className,
+  allowTime = false,
 }: DateRangePickerProps) {
   const [open, setOpen] = React.useState(false)
   const [localFrom, setLocalFrom] = React.useState<Date | undefined>(from)
   const [localTo, setLocalTo] = React.useState<Date | undefined>(to)
   const [showFromCalendar, setShowFromCalendar] = React.useState(true)
   const [mounted, setMounted] = React.useState(false)
+  const [localFromTime, setLocalFromTime] = React.useState<string>(() => {
+    if (!from) return "00:00"
+    return format(from, "HH:mm")
+  })
+  const [localToTime, setLocalToTime] = React.useState<string>(() => {
+    if (!to) return "23:59"
+    return format(to, "HH:mm")
+  })
 
   React.useEffect(() => {
     setMounted(true)
@@ -37,6 +47,8 @@ export function DateRangePicker({
   React.useEffect(() => {
     setLocalFrom(from)
     setLocalTo(to)
+    if (from) setLocalFromTime(format(from, "HH:mm"))
+    if (to) setLocalToTime(format(to, "HH:mm"))
   }, [from, to])
 
   const handleFromDate = (date: Date | undefined) => {
@@ -54,9 +66,19 @@ export function DateRangePicker({
 
   const handleApply = () => {
     if (localFrom && localTo) {
+      // Apply time components when allowTime is enabled
+      const applyFrom = new Date(localFrom)
+      const applyTo = new Date(localTo)
+      if (allowTime) {
+        const [fh, fm] = (localFromTime || "00:00").split(":").map(Number)
+        const [th, tm] = (localToTime || "23:59").split(":").map(Number)
+        applyFrom.setHours(isNaN(fh) ? 0 : fh, isNaN(fm) ? 0 : fm, 0, 0)
+        applyTo.setHours(isNaN(th) ? 23 : th, isNaN(tm) ? 59 : tm, 59, 999)
+      }
+
       const range = {
-        from: localFrom <= localTo ? localFrom : localTo,
-        to: localFrom > localTo ? localFrom : localTo,
+        from: applyFrom <= applyTo ? applyFrom : applyTo,
+        to: applyFrom > applyTo ? applyFrom : applyTo,
       }
       onDateRangeChange?.(range)
       setOpen(false)
@@ -71,9 +93,13 @@ export function DateRangePicker({
 
   const displayText =
     localFrom && localTo
-      ? `${format(localFrom, "MMM dd")} - ${format(localTo, "MMM dd")}`
+      ? allowTime
+        ? `${format(localFrom, "MMM dd, yyyy HH:mm")} - ${format(localTo, "MMM dd, yyyy HH:mm")}`
+        : `${format(localFrom, "MMM dd")} - ${format(localTo, "MMM dd")}`
       : localFrom
-        ? `From: ${format(localFrom, "MMM dd")}`
+        ? allowTime
+          ? `From: ${format(localFrom, "MMM dd, yyyy HH:mm")}`
+          : `From: ${format(localFrom, "MMM dd")}`
         : placeholder
 
   return (
@@ -117,6 +143,29 @@ export function DateRangePicker({
               />
             </div>
           </div>
+
+          {allowTime && (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">From time</label>
+                <Input
+                  type="time"
+                  value={localFromTime}
+                  onChange={(e) => setLocalFromTime(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">To time</label>
+                <Input
+                  type="time"
+                  value={localToTime}
+                  onChange={(e) => setLocalToTime(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Calendar */}
           <div className="flex justify-center">

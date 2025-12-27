@@ -40,13 +40,29 @@ export async function POST(req: Request) {
       return searchRes
     }
 
+    // Normalize hash: remove non-hex characters and whitespace
+    const normalizeHex = (h: string) => {
+      if (!h || typeof h !== 'string') return ''
+      return h.replace(/[^A-Fa-f0-9]/g, '').toLowerCase()
+    }
+
+    const normHash = normalizeHex(hash)
+
     let vtRes: Response
 
-    // Direct lookup for MD5/SHA1/SHA256 (VT accepts any of these for file id)
-    vtRes = await fetchFileById(hash)
+    // Try direct lookup using the normalized hash first
+    vtRes = await fetchFileById(normHash || hash)
     if (vtRes.status === 404) {
-      // Fallback search if direct lookup misses (handles cases where hash is not primary id)
-      const fallbackRes = await searchFile(hash)
+      // If direct lookup misses, try a broader search across md5/sha1/sha256 fields
+      const queryParts = []
+      if (normHash.length === 32) queryParts.push(`md5:${normHash}`)
+      if (normHash.length === 40) queryParts.push(`sha1:${normHash}`)
+      if (normHash.length === 64) queryParts.push(`sha256:${normHash}`)
+      // Always add a generic fallback query so plain hash tokens are considered
+      queryParts.push(normHash || hash)
+
+      const fallbackQuery = queryParts.join(' OR ')
+      const fallbackRes = await searchFile(fallbackQuery)
       if (fallbackRes.ok) {
         const searchData = await fallbackRes.json()
         const sha256 = searchData.data?.[0]?.id

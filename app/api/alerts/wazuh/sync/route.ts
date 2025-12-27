@@ -4,7 +4,7 @@ import { getAlerts as getWazuhAlerts, verifyConnection } from "@/lib/api/wazuh"
 
 export async function POST(request: NextRequest) {
   try {
-    const { integrationId } = await request.json()
+    const { integrationId, resetCursor, hoursBack, since, indexPattern, filters } = await request.json()
 
     if (!integrationId) {
       return NextResponse.json({ success: false, error: "Integration ID is required" }, { status: 400 })
@@ -33,18 +33,37 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const resetCursorHeader = request.headers.get("X-Wazuh-Reset-Cursor")
-    const hoursBackHeader = request.headers.get("X-Wazuh-Hours-Back")
-    const sinceHeader = request.headers.get("X-Wazuh-Since")
-    const hoursBack = hoursBackHeader ? parseInt(hoursBackHeader, 10) : undefined
+    // Ambil opsi sync dari body
+    console.log(`[Wazuh Sync Route] Received body options: resetCursor=${resetCursor}, hoursBack=${hoursBack}, since=${since}`)
+    console.log(`[Wazuh Sync Route] Request headers:`, Object.fromEntries(request.headers.entries()))
 
-    const result = await getWazuhAlerts(integrationId, {
-      resetCursor: resetCursorHeader === "true",
+    const syncOptions = {
+      resetCursor: !!resetCursor,
       hoursBack,
-      since: sinceHeader || undefined,
-    })
+      since,
+      indexPattern,
+      filters,
+    }
+
+    console.log(`[Wazuh Sync Route] Calling getWazuhAlerts with options:`, syncOptions)
+
+    const result = await getWazuhAlerts(integrationId, syncOptions)
+
+    console.log(`[Wazuh Sync Route] getWazuhAlerts result: ${result?.count} alerts`)
 
     console.log(`[Wazuh] Synced ${result.count} alerts`)
+
+    // Update lastSync in DB only if we actually stored alerts (avoid advancing cursor when nothing saved)
+    try {
+      if (result && result.count && result.count > 0) {
+        await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+        console.log(`[Wazuh Sync Route] integration.lastSync updated for ${integrationId}`)
+      } else {
+        console.log(`[Wazuh Sync Route] No alerts stored; skipping integration.lastSync update for ${integrationId}`)
+      }
+    } catch (e) {
+      console.error('[Wazuh Sync Route] Failed to update integration.lastSync:', e)
+    }
 
     return NextResponse.json({
       success: true,

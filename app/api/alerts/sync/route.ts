@@ -6,7 +6,7 @@ import { getAlerts as getWazuhAlerts, verifyConnection as verifyWazuhConnection 
 
 export async function POST(request: NextRequest) {
   try {
-    const { integrationId } = await request.json()
+    const { integrationId, resetCursor, hoursBack, since } = await request.json()
 
     if (!integrationId) {
       return NextResponse.json({ success: false, error: "Integration ID is required" }, { status: 400 })
@@ -50,22 +50,34 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        const resetCursorHeader = request.headers.get("X-Wazuh-Reset-Cursor")
-        const hoursBackHeader = request.headers.get("X-Wazuh-Hours-Back")
-        const sinceHeader = request.headers.get("X-Wazuh-Since")
-        const hoursBack = hoursBackHeader ? parseInt(hoursBackHeader, 10) : undefined
+        // Ambil opsi sync dari body jika ada, fallback ke header jika tidak ada (untuk backward compatibility)
+        let syncOptions: any = {}
+        if (typeof resetCursor !== "undefined" || typeof hoursBack !== "undefined" || typeof since !== "undefined") {
+          syncOptions = { resetCursor, hoursBack, since }
+        } else {
+          const resetCursorHeader = request.headers.get("X-Wazuh-Reset-Cursor")
+          const hoursBackHeader = request.headers.get("X-Wazuh-Hours-Back")
+          const sinceHeader = request.headers.get("X-Wazuh-Since")
+          syncOptions = {
+            resetCursor: resetCursorHeader === "true",
+            hoursBack: hoursBackHeader ? parseInt(hoursBackHeader, 10) : undefined,
+            since: sinceHeader || undefined,
+          }
+        }
 
-        const result = await getWazuhAlerts(integrationId, {
-          resetCursor: resetCursorHeader === "true",
-          hoursBack,
-          since: sinceHeader || undefined,
-        })
+        const result = await getWazuhAlerts(integrationId, syncOptions)
         console.log(`[Wazuh] Synced ${result.count} alerts`)
 
-        await prisma.integration.update({
-          where: { id: integrationId },
-          data: { lastSync: new Date() },
-        })
+        try {
+          if (result && result.count && result.count > 0) {
+            await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+            console.log(`[Wazuh] integration.lastSync updated for ${integrationId}`)
+          } else {
+            console.log(`[Wazuh] No alerts stored; skipping integration.lastSync update for ${integrationId}`)
+          }
+        } catch (e) {
+          console.error('[Wazuh] Failed to update integration.lastSync:', e)
+        }
 
         return NextResponse.json({
           success: true,

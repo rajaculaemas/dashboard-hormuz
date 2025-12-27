@@ -124,19 +124,49 @@ export function HashReputationDialog({ open, onOpenChange, hash, type, originalH
             </div>
           )}
 
-          {error && (
-            <Card className="border-red-200 bg-red-50 dark:bg-red-950">
-              <CardContent className="pt-4">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-red-900 dark:text-red-200">Error</p>
-                    <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          {error && (() => {
+            const lower = (error || "").toString().toLowerCase()
+            const isNotFound = lower.includes('notfound') || lower.includes('not found') || lower.includes('not_found')
+            if (isNotFound) {
+              return (
+                <Card className="border-gray-200 bg-gray-50">
+                  <CardContent className="pt-4">
+                    <div className="flex items-start gap-2">
+                      <ShieldQuestion className="h-5 w-5 text-gray-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">No record on VirusTotal</p>
+                        <p className="text-sm text-muted-foreground">VirusTotal has no existing record for this hash. No engines reported detections.</p>
+                        <p className="text-xs text-muted-foreground mt-2">Hash: <code className="font-mono">{hash}</code></p>
+                        <div className="mt-3 flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => {
+                            try { window.open(`https://www.virustotal.com/gui/search/${encodeURIComponent(hash)}`, '_blank') } catch { }
+                          }}>
+                            Open on VirusTotal
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => { checkReputation() }}>
+                            Recheck
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            }
+            return (
+              <Card className="border-red-200 bg-red-50 dark:bg-red-950">
+                <CardContent className="pt-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-red-900 dark:text-red-200">Error</p>
+                      <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                </CardContent>
+              </Card>
+            )
+          })()}
 
           {result && (
             <>

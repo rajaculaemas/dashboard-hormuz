@@ -37,6 +37,7 @@ export const rolePermissions = {
     'create_user',
     'update_user',
     'delete_user',
+    'delete_alert',
     'manage_roles',
   ],
   analyst: [

@@ -49,7 +49,7 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
   error: null,
   activeTab: "all",
   filters: {
-    timeRange: "12h",
+    timeRange: "3h",
     status: "New",
     severity: "all",
     source: "all",
@@ -116,7 +116,7 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
         }[filters.timeRange]
 
         const fromTime = new Date(Date.now() - (hours || 24) * 60 * 60 * 1000).toISOString()
-        params.append("from", fromTime)
+          params.append("time_range", filters.timeRange)
       }
 
       if (filters.status !== "all") {

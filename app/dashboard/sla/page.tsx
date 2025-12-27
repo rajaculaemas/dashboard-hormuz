@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
@@ -12,11 +12,12 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
-import { Clock, AlertTriangle, ShieldCheck, RefreshCw } from "lucide-react"
+import { Clock, AlertTriangle, ShieldCheck, RefreshCw, Download } from "lucide-react"
 import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
 import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-dialog"
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { CaseDetailDialog } from "@/components/case/case-detail-dialog"
+import { AlertColumnSelector, type AlertColumn } from "@/components/alert/alert-column-selector"
 
 interface Integration {
   id: string
@@ -164,10 +165,15 @@ function computeMTTD(alert: AlertItem, source: string): number | null {
     }
     
     // Fallback 1: If alert is closed/resolved, use updatedAt as detection time
-    if ((alert.status?.toLowerCase() === "closed" || alert.status?.toLowerCase() === "resolved") && alert.updatedAt && alertTime) {
-      const updatedAtMs = alert.updatedAt instanceof Date ? alert.updatedAt.getTime() : new Date(alert.updatedAt).getTime()
-      const mttdMs = computeMetricMs(alertTime, updatedAtMs)
-      return formatMetric(mttdMs)
+      if ((alert.status?.toLowerCase() === "closed" || alert.status?.toLowerCase() === "resolved") && alert.updatedAt && alertTime) {
+        let updatedAtMs: number
+        if (typeof alert.updatedAt === 'number') {
+          updatedAtMs = alert.updatedAt > 1000000000000 ? alert.updatedAt : alert.updatedAt * 1000
+        } else {
+          updatedAtMs = new Date(String(alert.updatedAt)).getTime()
+        }
+        const mttdMs = computeMetricMs(alertTime, updatedAtMs)
+        return formatMetric(mttdMs)
     }
     
     // Fallback 2: Check for any action in history and use the earliest one
@@ -275,6 +281,54 @@ export default function SlaDashboardPage() {
   const [loading, setLoading] = useState(false)
   const [scope, setScope] = useState<SlaScope>("all")
   const [integrationFilter, setIntegrationFilter] = useState<string>("all")
+  // Column selector for SLA table
+  const DEFAULT_SLA_COLUMNS: AlertColumn[] = [
+    { id: "type", label: "Type", visible: true },
+    { id: "name", label: "Name", visible: true },
+    { id: "timestamp", label: "Timestamp", visible: true },
+    { id: "integration", label: "Integration", visible: true },
+    { id: "severity", label: "Severity", visible: true },
+    { id: "metric", label: "Metric (min)", visible: true },
+    { id: "threshold", label: "Threshold (min)", visible: true },
+    { id: "status", label: "Status", visible: true },
+  ]
+  const [slaColumns, setSlaColumns] = useState<AlertColumn[]>(DEFAULT_SLA_COLUMNS)
+  const [sortBy, setSortBy] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<"asc"|"desc"|null>(null)
+
+  // Column widths for resizing (px)
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const resizingRef = useRef<{ colId: string; startX: number; startWidth: number } | null>(null)
+
+  useEffect(() => {
+    // Initialize widths for visible columns if not set
+    setColumnWidths((prev) => {
+      const widths = { ...prev }
+      slaColumns.forEach((c) => {
+        if (widths[c.id] === undefined) widths[c.id] = c.id === 'name' ? 360 : 140
+      })
+      return widths
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaColumns])
+
+  // Global mouse handlers to support resizing similar to AlertTable
+  useEffect(() => {
+    const onMove = (ev: MouseEvent) => {
+      const r = resizingRef.current
+      if (!r) return
+      const dx = ev.clientX - r.startX
+      const newW = Math.max(40, Math.round(r.startWidth + dx))
+      setColumnWidths((prev) => ({ ...prev, [r.colId]: newW }))
+    }
+    const onUp = () => { resizingRef.current = null }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
   
   // Initialize with last 14 days by default
   const getDefaultDateRange = () => {
@@ -296,6 +350,7 @@ export default function SlaDashboardPage() {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false)
   const [selectedCase, setSelectedCase] = useState<any | null>(null)
   const [caseDialogOpen, setCaseDialogOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   // Fetch integrations
   useEffect(() => {
@@ -420,6 +475,18 @@ export default function SlaDashboardPage() {
         })
       }
       
+      // Helper: normalize various timestamp representations to ms since epoch
+      const toMs = (v: any): number | null => {
+        if (v === undefined || v === null) return null
+        if (typeof v === 'number') return v > 1000000000000 ? v : v * 1000
+        const parsed = new Date(String(v)).getTime()
+        return Number.isFinite(parsed) ? parsed : null
+      }
+
+      // Determine alert timestamp candidates (integration-dependent)
+      const alertTsCandidates = [a.timestamp, a.metadata?.timestamp, a.metadata?.alert_time, a.metadata?.event_time, a.metadata?.created_at]
+      const alertTimestamp = alertTsCandidates.map(toMs).find((t) => t !== null) || null
+
       return {
         type: "alert" as const,
         id: a.id,
@@ -428,6 +495,7 @@ export default function SlaDashboardPage() {
         source,
         severity: sev,
         metric: mttd,
+        timestamp: alertTimestamp,
         threshold,
         pass,
         item: a,
@@ -463,6 +531,17 @@ export default function SlaDashboardPage() {
         })
       }
       
+      const toMs = (v: any): number | null => {
+        if (v === undefined || v === null) return null
+        if (typeof v === 'number') return v > 1000000000000 ? v : v * 1000
+        const parsed = new Date(String(v)).getTime()
+        return Number.isFinite(parsed) ? parsed : null
+      }
+
+      // For tickets use creation timestamp as primary source
+      const caseTsCandidates = [c.createdAt, c.metadata?.created_at, c.metadata?.createdAt, c.metadata?.ticket_created_at]
+      const caseTimestamp = caseTsCandidates.map(toMs).find((t) => t !== null) || null
+
       return {
         type: "ticket" as const,
         id: c.id,
@@ -471,6 +550,7 @@ export default function SlaDashboardPage() {
         source,
         severity: sev,
         metric: mttr,
+        timestamp: caseTimestamp,
         threshold,
         pass,
         item: c,
@@ -520,11 +600,31 @@ export default function SlaDashboardPage() {
     return { total, pass, fail, pending, achievement }
   }, [filteredRows])
 
+  // Apply sorting to filtered rows then paginate
+  const sortedRows = useMemo(() => {
+    if (!sortBy || !sortDir) return filteredRows
+    const copy = [...filteredRows]
+    copy.sort((a: any, b: any) => {
+      const va = a[sortBy]
+      const vb = b[sortBy]
+      if (va === vb) return 0
+      if (va === null || va === undefined) return 1
+      if (vb === null || vb === undefined) return -1
+      if (typeof va === 'number' && typeof vb === 'number') return sortDir === 'asc' ? va - vb : vb - va
+      const sa = String(va).toLowerCase()
+      const sb = String(vb).toLowerCase()
+      if (sa < sb) return sortDir === 'asc' ? -1 : 1
+      if (sa > sb) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+    return copy
+  }, [filteredRows, sortBy, sortDir])
+
   const paginatedRows = useMemo(() => {
     const startIdx = (currentPage - 1) * pageSize
     const endIdx = startIdx + pageSize
-    return filteredRows.slice(startIdx, endIdx)
-  }, [filteredRows, currentPage, pageSize])
+    return sortedRows.slice(startIdx, endIdx)
+  }, [sortedRows, currentPage, pageSize])
 
   const totalFiltered = useMemo(() => {
     return filteredRows.length
@@ -552,10 +652,75 @@ export default function SlaDashboardPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">SLA Dashboard</h1>
-        <Button variant="ghost" size="sm" onClick={onSubmitFilters} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          Apply Filters
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onSubmitFilters} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            Apply Filters
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true)
+              try {
+                // Send the currently filtered rows and visible columns to the server
+                const payload = {
+                  rows: filteredRows.map(r => ({
+                    id: r.id,
+                    type: r.type,
+                    name: r.name,
+                    timestamp: r.timestamp,
+                    integration: r.integration,
+                    severity: r.severity,
+                    metric: r.metric,
+                    threshold: r.threshold,
+                    status: r.status,
+                    pass: r.pass,
+                  })),
+                  columns: slaColumns.filter(c => c.visible).map(c => c.id),
+                  columnLabels: slaColumns.filter(c => c.visible).map(c => c.label),
+                }
+
+                const res = await fetch('/api/sla/export', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload),
+                })
+
+                if (!res.ok) throw new Error('Export failed')
+                const blob = await res.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'sla-export.xlsx'
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                URL.revokeObjectURL(url)
+              } catch (err) {
+                console.error('SLA export failed', err)
+                alert('Export failed: ' + (err as any).message)
+              } finally {
+                setExporting(false)
+              }
+            }}
+          >
+            {exporting ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-2" /> Export
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -715,38 +880,81 @@ export default function SlaDashboardPage() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">SLA Items ({scope === "tickets" ? "Tickets (MTTR)" : scope === "alerts" ? "Alerts (MTTD)" : "Alerts & Tickets"})</CardTitle>
+        <CardHeader className="flex w-full flex-row items-center justify-between">
+          <div className="flex-1 text-left">
+            <CardTitle className="text-sm text-left">SLA Items ({scope === "tickets" ? "Tickets (MTTR)" : scope === "alerts" ? "Alerts (MTTD)" : "Alerts & Tickets"})</CardTitle>
+          </div>
+          <div className="ml-auto flex-shrink-0">
+            <AlertColumnSelector columns={slaColumns} onColumnsChange={(cols) => setSlaColumns(cols)} />
+          </div>
         </CardHeader>
         <CardContent className="overflow-auto">
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>Type</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Integration</TableHead>
-                <TableHead>Severity</TableHead>
-                <TableHead>Metric (min)</TableHead>
-                <TableHead>Threshold (min)</TableHead>
-                <TableHead>Status</TableHead>
+              <TableRow className="bg-muted/50">
+                {slaColumns.filter(c => c.visible).map((col) => (
+                  <TableHead
+                    key={col.id}
+                    className="relative"
+                    style={columnWidths[col.id] ? { width: `${columnWidths[col.id]}px`, minWidth: `${columnWidths[col.id]}px` } : undefined}
+                  >
+                    <button
+                      className="text-sm font-medium flex items-center gap-2"
+                      onClick={() => {
+                        // toggle sort for this column
+                        if (sortBy === col.id) {
+                          setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+                        } else {
+                          setSortBy(col.id)
+                          setSortDir('asc')
+                        }
+                      }}
+                      type="button"
+                    >
+                      <span>{col.label}</span>
+                      <span className="text-xs text-muted-foreground">{sortBy === col.id ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
+                    </button>
+                    {/* Resizer handle (three-line grip, matches AlertTable) */}
+                    <div
+                      role="separator"
+                      onMouseDown={(e) => {
+                        const headerEl = (e.currentTarget as HTMLElement).closest('th') as HTMLElement | null
+                        const startWidth = columnWidths[col.id] || headerEl?.clientWidth || 150
+                        resizingRef.current = { colId: col.id, startX: e.clientX, startWidth }
+                        e.preventDefault()
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 cursor-col-resize flex items-center justify-center z-50"
+                      style={{ pointerEvents: 'auto' }}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      aria-hidden
+                    >
+                      <div className="flex flex-col gap-0.5 items-center">
+                        <span className="block w-4 h-0.5 bg-slate-400" />
+                        <span className="block w-4 h-0.5 bg-slate-400" />
+                        <span className="block w-4 h-0.5 bg-slate-400" />
+                      </div>
+                    </div>
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {!hasSubmitted ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={slaColumns.filter(c => c.visible).length} className="text-center text-sm text-muted-foreground">
                     Apply filters and press "Apply Filters" to load data.
                   </TableCell>
                 </TableRow>
               ) : loading ? (
                 <TableRow>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={slaColumns.filter(c => c.visible).length}>
                     <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
               ) : slaRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={slaColumns.filter(c => c.visible).length} className="text-center text-sm text-muted-foreground">
                     No data for selected filters.
                   </TableCell>
                 </TableRow>
@@ -765,54 +973,112 @@ export default function SlaDashboardPage() {
                       }
                     }}
                   >
-                    <TableCell className="capitalize font-medium">
-                      {row.type === "alert" ? (
-                        <Badge variant="outline" className="text-xs">Alert</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs">Ticket</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="max-w-xs truncate" title={row.name}>{row.name}</TableCell>
-                    <TableCell>{row.integration}</TableCell>
-                    <TableCell>
-                      <Badge variant={
-                        row.severity === "critical" ? "destructive" :
-                        row.severity === "high" ? "default" :
-                        row.severity === "medium" ? "secondary" : "outline"
-                      } className="capitalize text-xs">
-                        {row.severity}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-mono">
-                      {row.metric !== null ? (
-                        row.type === "ticket"
-                          ? `${Math.round(row.metric)} min` // Tickets table shows minutes; 0 min is valid
-                          : row.metric >= 1
-                            ? `${Math.round(row.metric)} min`
-                            : `${Math.round(row.metric * 60)} sec`
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-muted-foreground">{row.threshold} min</TableCell>
-                    <TableCell>
-                      {row.metric === null ? (
-                        <Badge variant="outline" className="text-xs">
-                          <Clock className="h-3 w-3 mr-1" />
-                          Pending
-                        </Badge>
-                      ) : row.pass ? (
-                        <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">
-                          <ShieldCheck className="h-3 w-3 mr-1" />
-                          Pass
-                        </Badge>
-                      ) : (
-                        <Badge variant="destructive" className="text-xs">
-                          <AlertTriangle className="h-3 w-3 mr-1" />
-                          Fail
-                        </Badge>
-                      )}
-                    </TableCell>
+                    {slaColumns.filter(c => c.visible).map((col) => {
+                      const colId = col.id
+                      const render = () => {
+                        switch (colId) {
+                          case 'type':
+                            return (
+                              <TableCell className="capitalize font-medium">
+                                {row.type === "alert" ? (
+                                  <Badge variant="outline" className="text-xs">Alert</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs">Ticket</Badge>
+                                )}
+                              </TableCell>
+                            )
+                          case 'name':
+                            return <TableCell className="max-w-xs truncate" title={row.name}>{row.name}</TableCell>
+                          case 'timestamp':
+                            {
+                              const formatTs = (ts: any) => {
+                                if (!ts) return null
+                                const d = new Date(ts)
+                                if (!Number.isFinite(d.getTime())) return null
+                                return d.toLocaleString('en-GB', {
+                                  timeZone: 'Asia/Jakarta',
+                                  year: 'numeric',
+                                  month: '2-digit',
+                                  day: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit',
+                                })
+                              }
+                              const formatted = formatTs((row as any).timestamp)
+                              return (
+                                <TableCell className="font-mono">
+                                  {formatted ? formatted : <span className="text-muted-foreground">-</span>}
+                                </TableCell>
+                              )
+                            }
+                          case 'integration':
+                            return <TableCell>{row.integration}</TableCell>
+                          case 'severity':
+                            return (
+                              <TableCell>
+                                <Badge variant={
+                                  row.severity === "critical" ? "destructive" :
+                                  row.severity === "high" ? "default" :
+                                  row.severity === "medium" ? "secondary" : "outline"
+                                } className="capitalize text-xs">
+                                  {row.severity}
+                                </Badge>
+                              </TableCell>
+                            )
+                          case 'metric':
+                            return (
+                              <TableCell className="font-mono">
+                                {row.metric !== null ? (
+                                  row.type === "ticket"
+                                    ? `${Math.round(row.metric)} min`
+                                    : row.metric >= 1
+                                      ? `${Math.round(row.metric)} min`
+                                      : `${Math.round(row.metric * 60)} sec`
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </TableCell>
+                            )
+                          case 'threshold':
+                            return <TableCell className="font-mono text-muted-foreground">{row.threshold} min</TableCell>
+                          case 'status':
+                            return (
+                              <TableCell>
+                                {row.metric === null ? (
+                                  <Badge variant="outline" className="text-xs">
+                                    <Clock className="h-3 w-3 mr-1" />
+                                    Pending
+                                  </Badge>
+                                ) : row.pass ? (
+                                  <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">
+                                    <ShieldCheck className="h-3 w-3 mr-1" />
+                                    Pass
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="destructive" className="text-xs">
+                                    <AlertTriangle className="h-3 w-3 mr-1" />
+                                    Fail
+                                  </Badge>
+                                )}
+                              </TableCell>
+                            )
+                          default:
+                            return <TableCell>-</TableCell>
+                        }
+                      }
+                      // render() returns a TableCell element — attach key, width and return it directly
+                      const cellEl = render()
+                      const style = columnWidths[colId] ? { width: `${columnWidths[colId]}px`, minWidth: `${columnWidths[colId]}px` } : undefined
+                      if (React.isValidElement(cellEl)) {
+                        return React.cloneElement(cellEl as React.ReactElement<any>, { key: col.id, style })
+                      }
+                      return (
+                        <TableCell key={col.id} style={style}>
+                          {cellEl}
+                        </TableCell>
+                      )
+                    })}
                   </TableRow>
                 ))
               )}
@@ -864,13 +1130,26 @@ export default function SlaDashboardPage() {
       {/* Detail dialogs */}
       {selectedAlert && (
         <>
-          {String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("wazuh") ? (
-            <WazuhAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
-          ) : String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("qradar") ? (
-            <QRadarAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
-          ) : (
-            <AlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
-          )}
+          {(() => {
+            const isWazuh = String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("wazuh")
+            const enriched = selectedAlert
+              ? ({
+                  ...selectedAlert,
+                  metadata: Object.assign({}, selectedAlert.metadata || {},
+                    selectedAlert.hash_sha256 ? { hash_sha256: selectedAlert.hash_sha256 } : {},
+                    selectedAlert.sha256 ? { sha256: selectedAlert.sha256 } : {},
+                    selectedAlert.sacti_search ? { sacti_search: selectedAlert.sacti_search } : {},
+                    selectedAlert.data_win_eventdata_hashes ? { data_win_eventdata_hashes: selectedAlert.data_win_eventdata_hashes } : {},
+                    selectedAlert.md5 ? { md5: selectedAlert.md5 } : {},
+                    selectedAlert.sha1 ? { sha1: selectedAlert.sha1 } : {}
+                  )
+                } as any)
+              : selectedAlert
+
+            if (isWazuh) return <WazuhAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={enriched} />
+            if (String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("qradar")) return <QRadarAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
+            return <AlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
+          })()}
         </>
       )}
       {selectedCase && (

@@ -1,9 +1,7 @@
 import https from "https"
 import fetch from "node-fetch"
 
-const httpsAgent = new https.Agent({
-  rejectUnauthorized: false,
-})
+const httpsAgent = new https.Agent({ rejectUnauthorized: false })
 
 export interface WazuhCredentials {
   elasticsearch_url: string
@@ -16,392 +14,223 @@ export interface WazuhAlert {
   id: string
   externalId: string
   timestamp: Date
-  agent: {
-    id: string
-    name: string
-    ip: string
-    labels?: {
-      customer?: string
-    }
-  }
-  rule: {
-    level: number
-    description: string
-    id: string
-    mitre?: {
-      id: string[]
-      tactic: string[]
-      technique: string[]
-    }
-    groups: string[]
-  }
-  title: string
-  severity: string | null
-  message: string
+  agent?: any
+  rule?: any
+  title?: string
+  message?: string
   srcIp?: string
   dstIp?: string
-  srcPort?: number
-  dstPort?: number
+  srcPort?: number | undefined
+  dstPort?: number | undefined
   protocol?: string
-  manager: {
-    name: string
-  }
-  cluster?: {
-    name: string
-    node: string
-  }
-  metadata: Record<string, any>
+  manager?: string
+  cluster?: string
+  severity?: number | null
+  metadata?: any
 }
 
 export class WazuhClient {
-  private elasticsearch_url: string
-  private elasticsearch_username: string
-  private elasticsearch_password: string
-  private elasticsearch_index: string
+  elasticsearch_url: string
+  elasticsearch_username: string
+  elasticsearch_password: string
+  elasticsearch_index: string
 
-  constructor(credentials: WazuhCredentials) {
-    this.elasticsearch_url = credentials.elasticsearch_url.replace(/\/$/, "")
-    this.elasticsearch_username = credentials.elasticsearch_username
-    this.elasticsearch_password = credentials.elasticsearch_password
-    // Normalize index pattern: Python reference uses "wazuh-posindonesia_*"
-    const idx = credentials.elasticsearch_index || "wazuh-*"
-    // Force correct pattern for POS Indonesia indices which are time-suffixed with underscore
-    if (idx.startsWith("wazuh-posindonesia")) {
-      this.elasticsearch_index = "wazuh-posindonesia_*"
-    } else {
-      this.elasticsearch_index = idx
+  constructor(creds: WazuhCredentials) {
+    this.elasticsearch_url = (creds.elasticsearch_url || "").replace(/\/+$/, "")
+    this.elasticsearch_username = creds.elasticsearch_username || ""
+    this.elasticsearch_password = creds.elasticsearch_password || ""
+    this.elasticsearch_index = creds.elasticsearch_index || "wazuh-*"
+  }
+
+  private parseTimestamp(src: any): Date {
+    const tsRaw = src.timestamp || src.timestamp_utc || src['@timestamp'] || src.msg_timestamp || new Date().toISOString()
+    if (typeof tsRaw === 'number') {
+      // Heuristic: treat large numbers as epoch milliseconds, smaller numbers as seconds
+      // Epoch millis in 2025 is ~1.7e12, so values > 1e12 are likely milliseconds
+      if (tsRaw > 1e12) return new Date(tsRaw)
+      return new Date(tsRaw * 1000)
+    }
+    try {
+      return new Date(tsRaw)
+    } catch {
+      return new Date()
     }
   }
 
-  private formatEsDate(date: Date): string {
-    const pad = (n: number, width = 2) => String(n).padStart(width, "0")
-    const year = date.getUTCFullYear()
-    const month = pad(date.getUTCMonth() + 1)
-    const day = pad(date.getUTCDate())
-    const hours = pad(date.getUTCHours())
-    const minutes = pad(date.getUTCMinutes())
-    const seconds = pad(date.getUTCSeconds())
-    const millis = pad(date.getUTCMilliseconds(), 3)
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`
-  }
+  async searchAlerts(
+    sinceISO?: string,
+    options?: { indexPattern?: string; extraFilters?: any; limit?: number },
+  ): Promise<WazuhAlert[]> {
+    const indexRaw = options?.indexPattern || this.elasticsearch_index
+    const indexPatterns = String(indexRaw).split(',').map((s) => s.trim()).filter(Boolean)
+    const pageSize = 500
+    const maxAlerts = options?.limit || 10000
+    const since = sinceISO || new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
+    const nowISO = new Date().toISOString()
 
-  private mapRuleLevelToSeverity(level: number): string {
-    if (level <= 4) return "Low"
-    if (level <= 7) return "Medium"
-    if (level <= 10) return "High"
-    return "Critical"
-  }
-
-  async searchAlerts(sinceTimestamp?: string): Promise<WazuhAlert[]> {
     const alertsMap = new Map<string, WazuhAlert>()
 
-    try {
-      const sinceDate = sinceTimestamp ? new Date(sinceTimestamp) : new Date(Date.now() - 2 * 60 * 60 * 1000) // Changed to 2 hours per user requirement
-      const since = this.formatEsDate(sinceDate)
-      const sinceISO = sinceDate.toISOString() // ISO format for timestamp_utc
-      const startEpoch = Math.floor(sinceDate.getTime() / 1000)
-      const endEpoch = Math.floor(Date.now() / 1000)
+    for (const indexPattern of indexPatterns) {
+      if (alertsMap.size >= maxAlerts) break
 
-      const pageSize = 10000 // Match Python script size
-      const maxAlerts = 10000 // Limit total alerts to prevent memory issues
-      const sort = [
-        { true: { order: "desc" } },
-        { timestamp_utc: { order: "desc", missing: "_last" } },
-        // Removed _id from sort - causes CircuitBreaker exception on large datasets
-      ]
+      const url = `${this.elasticsearch_url}/${indexPattern}/_search`
+      const isFortinet = /fortinet/i.test(indexPattern)
 
-      const url = `${this.elasticsearch_url}/${this.elasticsearch_index}/_search`
-      let totalFetched = 0
-
-      // PRIMARY query: Use `true` field (epoch) like Python reference - THIS WORKS
-      const baseQuery = {
+      const baseQuery: any = {
         size: pageSize,
-        sort,
+        // Avoid sorting on `@timestamp` for Fortinet indices because some
+        // Fortinet indices do not define that field in their mapping and
+        // Elasticsearch will reject the query. Sort only by `timestamp` to
+        // avoid fielddata pressure from sorting on `_id` which can trigger
+        // circuit_breaking exceptions on large indices.
+        sort: [{ timestamp: { order: "desc", missing: "_last" } }],
         query: {
           bool: {
-            must: [
-              { term: { syslog_level: "ALERT" } },
-            ],
+            must: isFortinet ? [] : [{ term: { syslog_level: "ALERT" } }],
+            // Match any of several common timestamp fields. Some Wazuh indices use
+            // `timestamp_utc`, others use `timestamp`, `@timestamp` or `msg_timestamp`.
+            // Use a `should` clause so documents that have any of these fields in
+            // the requested time range will be returned.
             filter: [
-              { range: { true: { gte: startEpoch, lte: endEpoch } } },
+              {
+                bool: {
+                  should: [
+                    { range: { timestamp_utc: { gte: since, lte: nowISO, format: "epoch_millis||strict_date_optional_time||uuuu-MM-dd HH:mm:ss.SSS" } } },
+                    { range: { timestamp: { gte: since, lte: nowISO, format: "epoch_millis||strict_date_optional_time||uuuu-MM-dd HH:mm:ss.SSS" } } },
+                    { range: { "@timestamp": { gte: since, lte: nowISO, format: "epoch_millis||strict_date_optional_time||uuuu-MM-dd HH:mm:ss.SSS" } } },
+                    { range: { msg_timestamp: { gte: since, lte: nowISO, format: "epoch_millis||strict_date_optional_time||uuuu-MM-dd HH:mm:ss.SSS" } } },
+                  ],
+                  minimum_should_match: 1,
+                },
+              },
             ],
           },
         },
       }
-      // FALLBACK query: ISO range on `timestamp_utc` if epoch returns zero
-      const fallbackQuery = {
-        size: pageSize,
-        sort,
-        query: {
-          bool: {
-            must: [
-              { term: { syslog_level: "ALERT" } },
-            ],
-            filter: [
-              { range: { timestamp_utc: { gte: sinceISO, lte: new Date().toISOString() } } },
-            ],
-          },
-        },
+
+      const extra = options?.extraFilters
+      if (extra) {
+        if (extra.term && typeof extra.term === 'object') {
+          Object.keys(extra.term).forEach((k) => baseQuery.query.bool.filter.push({ term: { [k]: extra.term[k] } }))
+        }
+        if (Array.isArray(extra.exists)) extra.exists.forEach((f: string) => baseQuery.query.bool.filter.push({ exists: { field: f } }))
+        if (extra.must_not) {
+          baseQuery.query.bool.must_not = baseQuery.query.bool.must_not || []
+          if (Array.isArray(extra.must_not)) {
+            extra.must_not.forEach((mn: any) => {
+              if (typeof mn === 'object') Object.keys(mn).forEach((k) => baseQuery.query.bool.must_not.push({ term: { [k]: mn[k] } }))
+            })
+          } else if (typeof extra.must_not === 'object') {
+            Object.keys(extra.must_not).forEach((k) => baseQuery.query.bool.must_not.push({ term: { [k]: extra.must_not[k] } }))
+          }
+        }
+      }
+
+      if (isFortinet) {
+        // For normal/streaming sync prefer only `tunnel-up` VPN events so we
+        // don't create alerts for tunnel-down (disconnect) events. Backfills
+        // can use the standalone script which includes both actions.
+        baseQuery.query.bool.filter.push({ term: { action: 'tunnel-up' } })
+        baseQuery.query.bool.filter.push({ exists: { field: 'remip_country_code' } })
+        baseQuery.query.bool.must_not = baseQuery.query.bool.must_not || []
+        baseQuery.query.bool.must_not.push({ term: { remip_country_code: 'ID' } })
       }
 
       let searchAfter: any[] | undefined
-      console.log(`[Wazuh Client] ======= ALERT SEARCH START =======`)
-      console.log(`[Wazuh Client] URL: ${url}`)
-      console.log(`[Wazuh Client] Index: ${this.elasticsearch_index}`)
-      console.log(`[Wazuh Client] Time Range (epoch): ${startEpoch} to ${endEpoch}`)
 
-      while (totalFetched < maxAlerts) {
-        let body: any = searchAfter ? { ...baseQuery, search_after: searchAfter } : baseQuery
+      while (alertsMap.size < maxAlerts) {
+        const body: any = { ...baseQuery }
+        if (searchAfter) body.search_after = searchAfter
 
-        const authHeader = "Basic " + Buffer.from(`${this.elasticsearch_username}:${this.elasticsearch_password}`).toString("base64")
-        const bodyJson = JSON.stringify(body)
-        
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: authHeader,
-          },
-          body: bodyJson,
-          agent: httpsAgent,
+        const auth = 'Basic ' + Buffer.from(`${this.elasticsearch_username}:${this.elasticsearch_password}`).toString('base64')
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: auth },
+          body: JSON.stringify(body),
+          agent: httpsAgent as any,
           timeout: 30000,
         } as any)
-        
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error(`[Wazuh Client] ❌ ES Error Response (${response.status}):`, errorText.substring(0, 800))
-          throw new Error(`Elasticsearch error: ${response.status} ${response.statusText} - ${errorText.substring(0, 500)}`)
+
+        if (!res.ok) {
+          const t = await res.text().catch(() => '')
+          throw new Error(`Elasticsearch error ${res.status} ${res.statusText} - ${t.substring(0, 500)}`)
         }
 
-        let data = (await response.json()) as any
-        let hits = data?.hits?.hits
+        const data = (await res.json()) as any
+        if (data?.error) throw new Error(`Elasticsearch error: ${JSON.stringify(data.error)}`)
 
-        console.log(`[Wazuh Client] Raw response structure:`, JSON.stringify({
-          has_hits: !!data?.hits,
-          total_structure: data?.hits?.total,
-          hits_array_length: data?.hits?.hits?.length,
-          has_error: !!data?.error
-        }))
-
-        if (data?.error) {
-          console.error(`[Wazuh Client] ES returned error:`, JSON.stringify(data.error, null, 2))
-          throw new Error(`Elasticsearch query error: ${JSON.stringify(data.error)}`)
-        }
-
-        let totalHits = typeof data?.hits?.total === 'object' ? data.hits.total.value : (data?.hits?.total || 0)
-        console.log(`[Wazuh Client] ES Response - Total hits: ${totalHits}, Returned: ${hits?.length || 0}`)
-        
-        if (hits?.length > 0) {
-          console.log(`[Wazuh Client] First hit timestamp:`, hits[0]._source?.timestamp_utc || hits[0]._source?.timestamp)
-        }
-
-        if (!hits || hits.length === 0) {
-          // Try fallback once when first page yields zero
-          if (!searchAfter && (totalHits === 0)) {
-            console.log(`[Wazuh Client] PRIMARY QUERY returned 0 hits. Retrying with timestamp_utc fallback...`)
-            body = searchAfter ? { ...fallbackQuery, search_after: searchAfter } : fallbackQuery
-            const response2 = await fetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: "Basic " + Buffer.from(`${this.elasticsearch_username}:${this.elasticsearch_password}`).toString("base64"),
-              },
-              body: JSON.stringify(body),
-              agent: httpsAgent,
-              timeout: 30000,
-            } as any)
-            if (!response2.ok) {
-              const errorText2 = await response2.text()
-              console.error(`[Wazuh Client] ES Error Response (fallback):`, errorText2.substring(0, 500))
-              throw new Error(`Elasticsearch error (fallback): ${response2.status} ${response2.statusText} - ${errorText2.substring(0, 500)}`)
-            }
-            data = (await response2.json()) as any
-            const hits2 = data?.hits?.hits
-            totalHits = typeof data?.hits?.total === 'object' ? data.hits.total.value : (data?.hits?.total || 0)
-            console.log(`[Wazuh Client] FALLBACK Response - Total hits: ${totalHits}, Returned: ${hits2?.length || 0}`)
-            if (!hits2 || hits2.length === 0) {
-              console.log(`[Wazuh Client] No more alerts found after fallback. Total fetched: ${totalFetched}`)
-              break
-            }
-            // Update hits variable to use fallback results
-            hits = hits2
-          } else {
-            console.log(`[Wazuh Client] No more alerts found. Total fetched: ${totalFetched}`)
-            break
+        const hits: any[] = data?.hits?.hits || []
+        console.log(`[WazuhClient] index=${indexPattern} returned ${hits.length} hits (page).`)
+        if (isFortinet && hits.length > 0) {
+          try {
+            const sample = hits[0]
+            console.log(`[WazuhClient][Fortinet] sample hit id=${sample._id} action=${sample._source?.action} remip_cc=${sample._source?.remip_country_code}`)
+          } catch (e) {
+            // ignore logging errors
           }
         }
+        if (!hits || hits.length === 0) break
 
-        console.log(`[Wazuh Client] Fetched ${hits.length} alerts (total so far: ${totalFetched + hits.length})`)
-
-        hits.forEach((hit: any) => {
-          const source = hit._source
+        for (const hit of hits) {
+          const src = hit._source || {}
 
           let parsedMessage: any = {}
-          if (typeof source.message === "string") {
-            try {
-              parsedMessage = JSON.parse(source.message)
-            } catch {
-              parsedMessage = {}
+          if (typeof src.message === 'string') {
+            try { parsedMessage = JSON.parse(src.message) } catch { parsedMessage = {} }
+          } else if (typeof src.message === 'object' && src.message) parsedMessage = src.message
+
+          const ts = this.parseTimestamp(src)
+
+          const vendorLogDesc = parsedMessage?.logdesc || src.logdesc
+          const ruleDesc = src.rule_description || ''
+          let title = vendorLogDesc || ruleDesc || (src.syslog_description || '[Unknown] Alert')
+
+          // Fortinet-specific title adjustment: mark successful VPNs outside
+          // Indonesia with a consistent title so UI scripts (and existing
+          // maintenance scripts) can rely on it.
+          try {
+            const actionField = (src.action || parsedMessage?.action || '').toString().trim().toLowerCase()
+            const remipCc = (src.remip_country_code || parsedMessage?.remip_country_code || '').toString().trim().toUpperCase()
+            if (isFortinet && actionField === 'tunnel-up' && remipCc && remipCc !== 'ID') {
+              title = 'VPN Successful Outside Indonesia'
             }
-          } else if (typeof source.message === "object" && source.message !== null) {
-            parsedMessage = source.message
+          } catch (e) {
+            // ignore
           }
-
-          // Defensive: skip documents that are not syslog_level ALERT.
-          // Some environments may index messages without the field visible in the UI
-          // (it can be present at top-level in ES). Ensure we only process ALERTs.
-          const syslogLevel = (source.syslog_level || parsedMessage?.syslog_level) as string | undefined
-          if (syslogLevel && syslogLevel.toUpperCase() !== "ALERT") {
-            console.log(`[Wazuh Client] Skipping doc ${source.id || hit._id} with syslog_level=${syslogLevel}`)
-            return
-          }
-
-          const agentId = source.agent_id || ""
-          const agentName = source.agent_name || ""
-          const agentIp = source.agent_ip || ""
-          const agentLabels = source.agent_labels_customer || ""
-
-          const ruleId = source.rule_id || ""
-          const ruleLevel = source.rule_level || 1
-          const ruleDescription = source.rule_description || ""
-          const ruleGroups = source.rule_groups || ""
-
-          const managerId = source.cluster_node || ""
-          const clusterName = source.cluster_name || ""
-
-          // Extract network info: try ES fields first, then fall back to parsed message data
-          let srcIp = source.src_ip || source.source || source.data_win_eventdata_sourceIp || source.data_srcip || ""
-          let dstIp = source.dst_ip || source.destination || source.data_win_eventdata_destinationIp || source.data_dstip || ""
-          let srcPort = source.src_port ? parseInt(source.src_port, 10) : (source.data_source_port ? parseInt(source.data_source_port, 10) : undefined)
-          let dstPort = source.dst_port ? parseInt(source.dst_port, 10) : (source.data_destination_port ? parseInt(source.data_destination_port, 10) : undefined)
-          let protocol = source.protocol || source.data_win_eventdata_protocol || source.data_protocol || ""
-          
-          // For web logs, extract from parsed message data (nginx, apache logs)
-          if (parsedMessage?.data) {
-            const msgData = parsedMessage.data
-            if (msgData.srcip && !srcIp) srcIp = msgData.srcip
-            if (msgData.dstip && !dstIp) dstIp = msgData.dstip
-            if (msgData.srcport && !srcPort) srcPort = parseInt(msgData.srcport, 10)
-            if (msgData.dstport && !dstPort) dstPort = parseInt(msgData.dstport, 10)
-            if (msgData.protocol && !protocol) protocol = msgData.protocol
-          }
-
-          const timestamp = source.timestamp_utc || source.timestamp || new Date().toISOString()
-
-          const title =
-            (ruleDescription && ruleDescription.trim()) ||
-            (source.syslog_description && source.syslog_description.trim()) ||
-            `[Unknown] Alert`
-
-          const messageStr = source.syslog_description || ruleDescription || source.message || "No details available"
 
           const alert: WazuhAlert = {
-            id: source.id || hit._id,
-            externalId: source.id || hit._id,
-            timestamp: new Date(timestamp),
-            agent: {
-              id: agentId,
-              name: agentName,
-              ip: agentIp,
-              labels: agentLabels ? { customer: agentLabels } : undefined,
-            },
-            rule: {
-              level: ruleLevel,
-              description: ruleDescription,
-              id: ruleId,
-              mitre: parsedMessage?.rule?.mitre,
-              groups: ruleGroups ? ruleGroups.split(",").map((g: string) => g.trim()) : [],
-            },
-            title,
-            severity: null,
-            message: messageStr,
-            srcIp,
-            dstIp,
-            srcPort,
-            dstPort,
-            protocol,
-            manager: {
-              name: managerId || source.manager_name || "",
-            },
-            cluster: clusterName
-              ? {
-                  name: clusterName,
-                  node: source.cluster_node || "",
-                }
-              : undefined,
-            metadata: {
-              id: source.id,
-              externalId: source.id,
-              raw_es: source,
-              timestamp,
-              location: source.location || source.decoder_name,
-              ruleId,
-              ruleLevel,
-              ruleDescription,
-              ruleFiredTimes: source.rule_firedtimes,
-              ruleGroups: ruleGroups ? ruleGroups.split(",").map((g: string) => g.trim()) : [],
-              ruleMailAlert: source.rule_mail,
-              agentId,
-              agentName,
-              agentIp,
-              agentLabels: agentLabels ? { customer: agentLabels } : undefined,
-              managerId,
-              clusterName,
-              clusterNode: source.cluster_node,
-              srcIp,
-              dstIp,
-              srcPort,
-              dstPort,
-              protocol,
-              // Web request fields - try ES fields first, then parsed message
-              url: source.data_url || parsedMessage?.data?.url || "",
-              httpMethod: source.data_protocol || parsedMessage?.data?.protocol || protocol || "",
-              httpStatusCode: source.data_id || parsedMessage?.data?.id || "",
-              userAgent: source.user_agent || parsedMessage?.data?.user_agent || "",
-              pciDss: source.rule_pci_dss?.split(","),
-              gdpr: source.rule_gdpr?.split(","),
-              hipaa: source.rule_hipaa?.split(","),
-              nist800_53: source.rule_nist_800_53?.split(","),
-              mitreTactic: source.rule_mitre_tactic || parsedMessage?.rule?.mitre?.tactic,
-              mitreId: source.rule_mitre_id || parsedMessage?.rule?.mitre?.id,
-              mitreTechnique: source.rule_mitre_technique || parsedMessage?.rule?.mitre?.technique,
-              message: typeof source.message === "string" ? source.message : JSON.stringify(source.message),
-              eventData: parsedMessage?.data?.win?.eventdata,
-              fullLog: source.full_log,
-            },
+            id: src.id || hit._id,
+            externalId: src.id || hit._id,
+            timestamp: ts,
+            agent: { id: src.agent_id, name: src.agent_name, ip: src.agent_ip },
+            rule: { id: src.rule_id, description: ruleDesc },
+            title: String(title).trim(),
+            message: src.syslog_description || ruleDesc || src.message || '',
+            srcIp: src.src_ip || src.source || parsedMessage?.srcip,
+            dstIp: src.dst_ip || src.destination || parsedMessage?.dstip,
+            srcPort: src.src_port ? parseInt(String(src.src_port), 10) : undefined,
+            dstPort: src.dst_port ? parseInt(String(src.dst_port), 10) : undefined,
+            protocol: src.protocol || parsedMessage?.protocol || '',
+            manager: src.manager || src.cluster_node || undefined,
+            cluster: src.cluster_name || undefined,
+            severity: src.rule_level ? Number(src.rule_level) : (parsedMessage?.severity ? Number(parsedMessage.severity) : null),
+            metadata: { raw_es: src },
           }
 
-          if (!alertsMap.has(alert.externalId)) {
-            alertsMap.set(alert.externalId, alert)
-          }
-        })
-
-        totalFetched += hits.length
-
-        const lastHit = hits[hits.length - 1]
-        searchAfter = lastHit?.sort
-
-        // Check if last alert is older than since - if so, we can stop
-        const lastTimestamp = hits[hits.length - 1]?._source?.timestamp_utc || hits[hits.length - 1]?._source?.timestamp
-        if (lastTimestamp && new Date(lastTimestamp).getTime() < sinceDate.getTime()) {
-          console.log(`[Wazuh Client] Last alert timestamp (${lastTimestamp}) is older than since boundary, stopping`)
-          break
+          if (!alertsMap.has(alert.externalId)) alertsMap.set(alert.externalId, alert)
+          if (alertsMap.size >= maxAlerts) break
         }
 
-        // Continue to next page if we have search_after and haven't hit limit
-        if (!searchAfter || hits.length < pageSize) {
-          console.log(`[Wazuh Client] No more pages available (hits: ${hits.length}, pageSize: ${pageSize})`)
-          break
-        }
+        if (isFortinet) break // single-page for Fortinet indices
+
+        const last = hits[hits.length - 1]
+        searchAfter = last?.sort
+        if (!searchAfter || hits.length < pageSize) break
       }
-
-      console.log(`[Wazuh Client] ✅ Final result: ${alertsMap.size} unique alerts fetched`)
-      console.log(`[Wazuh Client] ======= ALERT SEARCH END =======`)
-      return Array.from(alertsMap.values())
-    } catch (error) {
-      console.error("❌ Error searching Wazuh alerts:", error)
-      console.log(`[Wazuh Client] ======= ALERT SEARCH FAILED =======`)
-      throw error
     }
+
+    return Array.from(alertsMap.values())
   }
 }
+
+export default WazuhClient

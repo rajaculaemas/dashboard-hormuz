@@ -319,3 +319,33 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return NextResponse.json({ error: "Failed to update alert status" }, { status: 500 })
   }
 }
+
+export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const user = await getCurrentUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!hasPermission(user.role, 'delete_alert')) {
+      return NextResponse.json({ error: "Forbidden: You don't have permission to delete alerts" }, { status: 403 })
+    }
+
+    const alertId = (await params).id
+    if (!alertId) return NextResponse.json({ error: 'Missing alert id' }, { status: 400 })
+
+    // Find alert first
+    const alert = await prisma.alert.findUnique({ where: { id: alertId } })
+    if (!alert) return NextResponse.json({ error: 'Alert not found' }, { status: 404 })
+
+    // Delete alert and related timeline entries
+    await prisma.$transaction([
+      prisma.alertTimeline.deleteMany({ where: { alertId } }),
+      prisma.alert.delete({ where: { id: alertId } }),
+    ])
+
+    console.log(`[DELETE] Alert ${alertId} deleted by user ${user.id}`)
+
+    return NextResponse.json({ success: true, message: 'Alert deleted' })
+  } catch (error) {
+    console.error('Error in DELETE /api/alerts/[id]:', error)
+    return NextResponse.json({ error: 'Failed to delete alert' }, { status: 500 })
+  }
+}

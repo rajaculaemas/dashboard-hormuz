@@ -45,13 +45,19 @@ export function SyncStatus() {
 
       const integration = integrations.find(i => i.id === integrationId)
       const isWazuh = integration?.source === "wazuh"
-      
       const endpoint = isWazuh ? "/api/alerts/wazuh/sync" : "/api/alerts/sync"
 
+      // Untuk Wazuh, kirim resetCursor dan hoursBack di body agar API bisa baca langsung
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      let body: any = { integrationId }
+      if (isWazuh) {
+        body.resetCursor = true
+        body.hoursBack = 3
+      }
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ integrationId }),
+        headers,
+        body: JSON.stringify(body),
       })
 
       if (response.ok) {
