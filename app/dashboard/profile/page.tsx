@@ -29,7 +29,10 @@ export default function ProfilePage() {
     password: '',
     newPassword: '',
     confirmPassword: '',
+    stellarCyberApiKey: '',
   });
+  const [stellarKeyStatus, setStellarKeyStatus] = useState<{ hasKey: boolean } | null>(null);
+  const [savingApiKey, setSavingApiKey] = useState(false);
 
   // Fetch current user data
   useEffect(() => {
@@ -45,6 +48,13 @@ export default function ProfilePage() {
           ...prev,
           name: data.user.name || '',
         }));
+        
+        // Fetch Stellar API key status
+        const stellarResponse = await fetch('/api/users/me/stellar-key');
+        if (stellarResponse.ok) {
+          const stellarData = await stellarResponse.json();
+          setStellarKeyStatus({ hasKey: !!stellarData.hasApiKey });
+        }
       } catch (error) {
         toast({
           title: 'Error',
@@ -118,6 +128,41 @@ export default function ProfilePage() {
         description: 'Profile updated successfully',
       });
 
+      // Save Stellar API key if provided
+      if (formData.stellarCyberApiKey.trim()) {
+        setSavingApiKey(true);
+        try {
+          const stellarResponse = await fetch('/api/users/me/stellar-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey: formData.stellarCyberApiKey }),
+          });
+
+          console.log('Stellar API key response status:', stellarResponse.status);
+          const stellarData = await stellarResponse.json();
+          console.log('Stellar API key response data:', stellarData);
+
+          if (stellarResponse.ok) {
+            toast({
+              title: 'Success',
+              description: 'Stellar Cyber API key saved successfully',
+            });
+            setStellarKeyStatus({ hasKey: true });
+          } else {
+            throw new Error(stellarData.error || 'Failed to save Stellar API key');
+          }
+        } catch (error: any) {
+          console.error('Error saving Stellar API key:', error);
+          toast({
+            title: 'Warning',
+            description: error.message || 'Failed to save Stellar API key',
+            variant: 'destructive',
+          });
+        } finally {
+          setSavingApiKey(false);
+        }
+      }
+
       console.log('Closing dialog...');
       setOpenDialog(false);
       
@@ -127,6 +172,7 @@ export default function ProfilePage() {
         password: '',
         newPassword: '',
         confirmPassword: '',
+        stellarCyberApiKey: '',
       });
 
       // Refresh user data
@@ -199,6 +245,7 @@ export default function ProfilePage() {
                   password: '',
                   newPassword: '',
                   confirmPassword: '',
+                  stellarCyberApiKey: '',
                 });
               }}>
                 <Edit2 className="w-4 h-4 mr-2" />
@@ -221,6 +268,40 @@ export default function ProfilePage() {
                     }
                     required
                   />
+                </div>
+
+                <div className="border-t pt-4">
+                  <h3 className="font-semibold mb-4">Stellar Cyber API Key</h3>
+                  <div className="space-y-3 mb-6">
+                    {stellarKeyStatus?.hasKey ? (
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <p className="text-sm text-green-800">
+                          ✓ Stellar Cyber API Key is configured
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <p className="text-sm text-yellow-800">
+                          No Stellar Cyber API Key configured. Add one to update alert/case status in Stellar Cyber.
+                        </p>
+                      </div>
+                    )}
+                    <div>
+                      <Label htmlFor="stellarApiKey">Add or Update API Key</Label>
+                      <Input
+                        id="stellarApiKey"
+                        type="password"
+                        placeholder="Paste your Stellar Cyber API key here"
+                        value={formData.stellarCyberApiKey}
+                        onChange={(e) =>
+                          setFormData({ ...formData, stellarCyberApiKey: e.target.value })
+                        }
+                      />
+                      <p className="text-xs text-gray-500 mt-2">
+                        Leave empty to keep your current key
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="border-t pt-4">

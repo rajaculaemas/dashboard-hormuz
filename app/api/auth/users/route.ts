@@ -21,6 +21,8 @@ export async function GET(request: NextRequest) {
         email: true,
         name: true,
         role: true,
+        position: true,
+        telegramChatId: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -67,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { email, name, password, role = 'analyst', integrationIds = [] } = body;
+    const { email, name, password, role = 'analyst', position, telegramChatId, integrationIds = [] } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -104,6 +106,8 @@ export async function POST(request: NextRequest) {
         name,
         password: hashedPassword,
         role,
+        position: position || null,
+        telegramChatId: telegramChatId || null,
         status: 'active',
         // Assign integrations jika bukan administrator
         ...(role !== 'administrator' && integrationIds.length > 0 && {
@@ -121,6 +125,7 @@ export async function POST(request: NextRequest) {
         email: true,
         name: true,
         role: true,
+        position: true,
         status: true,
         createdAt: true,
         assignedIntegrations: {

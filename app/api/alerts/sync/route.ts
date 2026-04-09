@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma"
 import { QRadarClient } from "@/lib/api/qradar"
 import { getAlerts } from "@/lib/api/stellar-cyber"
 import { getAlerts as getWazuhAlerts, verifyConnection as verifyWazuhConnection } from "@/lib/api/wazuh"
+import { getSocfortressAlerts } from "@/lib/api/socfortress"
 
 export async function POST(request: NextRequest) {
   try {
@@ -251,6 +252,76 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.error("[v0] QRadar sync error:", err)
         return NextResponse.json({ success: false, error: "Failed to sync QRadar offenses", details: err instanceof Error ? err.message : String(err) }, { status: 500 })
+      }
+    }
+
+    // SOCFortress/Copilot MySQL path
+    if (source === "socfortress" || source === "copilot") {
+      console.log("[SOCFortress] Starting sync for:", integrationId)
+      try {
+        const result = await getSocfortressAlerts(integrationId, { limit: 500 })
+
+        console.log(`[SOCFortress] Fetched ${result.count} alerts`)
+
+        let syncedCount = 0
+        let errorCount = 0
+
+        for (const alert of result.alerts) {
+          try {
+            const mappedAlert = {
+              externalId: alert.externalId,
+              title: alert.title,
+              description: alert.description || "",
+              severity: alert.severity,
+              status: alert.status,
+              timestamp: alert.timestamp,
+              integrationId: alert.integrationId,
+              metadata: alert.metadata || {},
+            }
+
+            console.log(`[SOCFortress] Upserting alert ${alert.externalId}: "${alert.title}" with status "${alert.status}" and ${alert.metadata?.tags?.length || 0} tags:`, alert.metadata?.tags)
+
+            await prisma.alert.upsert({
+              where: { externalId: alert.externalId },
+              update: {
+                title: mappedAlert.title,
+                description: mappedAlert.description,
+                severity: mappedAlert.severity,
+                status: mappedAlert.status,
+                timestamp: mappedAlert.timestamp,
+                metadata: mappedAlert.metadata,
+              },
+              create: mappedAlert,
+            })
+
+            syncedCount++
+          } catch (err) {
+            console.error("[SOCFortress] Error syncing alert", alert.externalId, err)
+            errorCount++
+          }
+        }
+
+        await prisma.integration.update({ where: { id: integrationId }, data: { lastSync: new Date() } })
+
+        console.log(`[SOCFortress] Sync complete: ${syncedCount} synced, ${errorCount} errors`)
+
+        return NextResponse.json({
+          success: true,
+          message: `Successfully synced ${syncedCount} alerts`,
+          synced: syncedCount,
+          errors: errorCount,
+          total: result.count,
+        })
+      } catch (err) {
+        console.error("[SOCFortress] Sync error:", err)
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Failed to sync SOCFortress alerts",
+            details: err instanceof Error ? err.message : String(err),
+          },
+          { status: 500 },
+        )
       }
     }
 

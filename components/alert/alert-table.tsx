@@ -46,13 +46,166 @@ function normalizeHttpStatus(v: any): string | null {
   } catch {}
   return null
 }
+
+// ===== COPILOT/SOCFORTRESS HELPERS =====
+// Parser untuk Copilot/Socfortress alerts - parse source_data JSON yang embedded
+function parseCopilotSourceData(alert: any): any {
+  try {
+    const metadata = alert.metadata || {}
+    const incidentEvent = metadata.incident_event || {}
+    const sourceData = incidentEvent.source_data
+    
+    if (!sourceData) return {}
+    
+    let parsed: any = {}
+    if (typeof sourceData === "string") {
+      parsed = JSON.parse(sourceData)
+    } else {
+      parsed = sourceData
+    }
+    
+    // Jika ada field 'message' yang merupakan JSON string, parse juga
+    if (parsed.message && typeof parsed.message === "string") {
+      try {
+        parsed.message = JSON.parse(parsed.message)
+      } catch {}
+    }
+    
+    return parsed
+  } catch (e) {
+    return {}
+  }
+}
+
+// Extract rule info dari Copilot alert
+function extractCopilotRuleInfo(alert: any): any {
+  const sourceData = parseCopilotSourceData(alert)
+  const messageData = sourceData.message || sourceData
+  
+  if (messageData && messageData.rule) {
+    return {
+      id: messageData.rule.id || "",
+      description: messageData.rule.description || "",
+      level: messageData.rule.level || 0,
+      mitre: messageData.rule.mitre || { id: [], tactic: [] },
+    }
+  }
+  return {}
+}
+
+// Extract agent info dari Copilot alert
+function extractCopilotAgentInfo(alert: any): any {
+  const sourceData = parseCopilotSourceData(alert)
+  const messageData = sourceData.message || sourceData
+  const metadata = alert.metadata || {}
+  
+  if (messageData && messageData.agent) {
+    return {
+      id: messageData.agent.id || "",
+      name: messageData.agent.name || "",
+      ip: messageData.agent.ip || "",
+    }
+  }
+  
+  // Fallback dari metadata fields yang sudah diparse
+  return {
+    id: metadata.agent_id || metadata.agentId || "",
+    name: metadata.agent_name || metadata.agentName || "",
+    ip: metadata.agent_ip || metadata.agentIp || "",
+  }
+}
+
+// Extract network info dari Copilot alert
+function extractCopilotNetworkInfo(alert: any): any {
+  const sourceData = parseCopilotSourceData(alert)
+  const messageData = sourceData.message || sourceData
+  const data = messageData.data || sourceData.data || {}
+  const metadata = alert.metadata || {}
+  
+  const srcIp =
+    data.srcip ||
+    data.win?.eventdata?.sourceIp ||
+    data.columns?.remote_address ||
+    metadata.agent_ip ||
+    metadata.srcip ||
+    ""
+  
+  const dstIp =
+    data.dstip ||
+    data.win?.eventdata?.destinationIp ||
+    data.columns?.local_address ||
+    metadata.dstip ||
+    ""
+  
+  const srcPort =
+    data.srcport ||
+    data.win?.eventdata?.sourcePort ||
+    metadata.srcport ||
+    ""
+  
+  const dstPort =
+    data.dstport ||
+    data.win?.eventdata?.destinationPort ||
+    metadata.dstport ||
+    ""
+  
+  return { srcIp, dstIp, srcPort, dstPort }
+}
+
+// Extract command line dari Copilot alert
+function extractCopilotCmdLine(alert: any): string {
+  const sourceData = parseCopilotSourceData(alert)
+  const messageData = sourceData.message || sourceData
+  const data = messageData.data || sourceData.data || {}
+  const metadata = alert.metadata || {}
+  
+  return (
+    data.columns?.cmdline ||
+    data.win?.eventdata?.commandLine ||
+    metadata.data_columns_cmdline ||
+    metadata.process_cmd_line ||
+    metadata.process_cmdline ||
+    ""
+  )
+}
+
+// Extract process image/file dari Copilot alert
+function extractCopilotProcessImage(alert: any): string {
+  const sourceData = parseCopilotSourceData(alert)
+  const messageData = sourceData.message || sourceData
+  const data = messageData.data || sourceData.data || {}
+  const metadata = alert.metadata || {}
+  
+  return (
+    data.columns?.path ||
+    data.win?.eventdata?.image ||
+    metadata.data_win_eventdata_image ||
+    metadata.process_image ||
+    ""
+  )
+}
+
+// Extract tags dari Copilot alert
+function extractCopilotTags(alert: any): string[] {
+  const metadata = alert.metadata || {}
+  const tags = metadata.tags || metadata.socfortress?.tags || []
+  
+  if (Array.isArray(tags)) {
+    return tags.map((t: any) => (typeof t === "string" ? t : t.tag || ""))
+  }
+  
+  return []
+}
+
 // Extract common network fields (src/dst IP, response code, referer/domain) from Wazuh alert metadata/message
 function extractWazuhNetworkFields(alert: any) {
   const metadata = alert.metadata || {}
   let parsedData: any = {}
-  if (metadata.message && typeof metadata.message === "string") {
+  // Parse either metadata.message (stored shape) or top-level alert.message
+  const rawMsg = metadata.message || alert.message || null
+  if (rawMsg && typeof rawMsg === "string") {
     try {
-      parsedData = JSON.parse(metadata.message)
+      parsedData = JSON.parse(rawMsg)
     } catch {}
   }
 
@@ -85,27 +238,43 @@ function extractWazuhNetworkFields(alert: any) {
     get(() => metadata.raw_es?.dst_ip) ||
     ""
 
-  const responseCode =
-    get(() => parsedData.data.win.eventdata.id) ||
-    get(() => parsedData.data.id) ||
-    get(() => parsedData.data.columns?.id) ||
-    get(() => parsedData.data?.http?.response?.status_code) ||
-    get(() => parsedData.data?.http?.response?.status) ||
-    metadata.httpStatusCode ||
-    metadata.data_id ||
-    alert.data_id ||
-    alert.dataId ||
-    metadata.dataId ||
-    metadata.response_code ||
-    metadata.status_code ||
-    get(() => metadata.raw_es?.data_id) ||
-    get(() => metadata.raw_es?.data?.id) ||
-    get(() => metadata.raw_es?.id) ||
-    get(() => metadata.raw_es?.http?.response?.status_code) ||
-    get(() => metadata.raw_es?.http?.response?.status) ||
-    get(() => metadata.raw_es?.http_status_code) ||
-    get(() => metadata.raw_es?.status_code) ||
-    ""
+  // Prefer explicit HTTP/status fields or data_id. Avoid using generic `id`
+  // fields which often represent event IDs rather than HTTP response codes.
+  const responseCode = (() => {
+    const candidate = (
+      get(() => parsedData.data?.http?.response?.status_code) ||
+      get(() => parsedData.data?.http?.response?.status) ||
+      get(() => parsedData.data?.status_code) ||
+      get(() => parsedData.data?.http_status_code) ||
+      // parsedData.data?.id is often the actual response code in web-accesslog decoders
+      get(() => parsedData.data?.id) ||
+      metadata.httpStatusCode ||
+      metadata.data_id ||
+      alert.data_id ||
+      alert.dataId ||
+      metadata.dataId ||
+      metadata.response_code ||
+      metadata.status_code ||
+      // check raw_es shapes that may contain data_id or nested id
+      get(() => metadata.raw_es?.data_id) ||
+      get(() => metadata.raw_es?.data?.id) ||
+      get(() => metadata.raw_es?.http?.response?.status_code) ||
+      get(() => metadata.raw_es?.http?.response?.status) ||
+      get(() => metadata.raw_es?.http_status_code) ||
+      get(() => metadata.raw_es?.status_code) ||
+      null
+    )
+    if (candidate !== null && candidate !== undefined) return candidate
+
+    // As a last resort, try to find a 3-digit HTTP status inside full_log or message
+    const fullLog = parsedData.full_log || metadata.fullLog || metadata.message || alert.full_log || alert.message || ""
+    try {
+      const txt = String(fullLog)
+      const m = txt.match(/\b([1-5][0-9]{2})\b/)
+      if (m && m[1]) return m[1]
+    } catch {}
+    return ""
+  })()
 
   // Extract referer/domain from common locations: parsed data headers, metadata.referer, or full log
   let referer =
@@ -400,6 +569,21 @@ export function AlertTable({
         return `${mttdDays}d`
       }
 
+      // Socfortress/Copilot: uses pre-calculated socfortress_alert_to_first (in milliseconds)
+      const socfortressMttdMs = alert.metadata?.socfortress_alert_to_first
+      if (socfortressMttdMs !== null && socfortressMttdMs !== undefined) {
+        const mttdMinutes = Math.round(socfortressMttdMs / (60 * 1000))
+        if (mttdMinutes < 1) {
+          const mttdSeconds = Math.round(socfortressMttdMs / 1000)
+          return mttdSeconds >= 0 ? `${mttdSeconds}s` : "-"
+        }
+        if (mttdMinutes < 60) return `${mttdMinutes}m`
+        const mttdHours = Math.floor(mttdMinutes / 60)
+        if (mttdHours < 24) return `${mttdHours}h`
+        const mttdDays = Math.floor(mttdHours / 24)
+        return `${mttdDays}d`
+      }
+
       // Wazuh & QRadar: calculate from alert timestamp to updatedAt (first action)
       const eventTime = new Date(alert.timestamp || alert.created_at)
       const actionTime = new Date(alert.updatedAt || alert.updated_at)
@@ -431,7 +615,11 @@ export function AlertTable({
       case "title":
         return alert.title || alert.metadata?.rule?.description || alert.metadata?.ruleDescription || alert.description || "Unknown"
 
-      case "srcip":
+      case "srcip": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNet = extractCopilotNetworkInfo(alert)
+        if (copilotNet.srcIp) return copilotNet.srcIp
+        
         // Prefer parsed/normalized Wazuh fields (including message payload)
         const net1 = extractWazuhNetworkFields(alert)
         return (
@@ -445,8 +633,13 @@ export function AlertTable({
           alert.srcip ||
           "-"
         )
+      }
 
-      case "dstip":
+      case "dstip": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNet = extractCopilotNetworkInfo(alert)
+        if (copilotNet.dstIp) return copilotNet.dstIp
+        
         const net2 = extractWazuhNetworkFields(alert)
         return (
           net2.dstIp ||
@@ -459,6 +652,7 @@ export function AlertTable({
           alert.dstip ||
           "-"
         )
+      }
 
       case "responseCode":
         const net3 = extractWazuhNetworkFields(alert)
@@ -525,7 +719,11 @@ export function AlertTable({
           </Badge>
         )
 
-      case "sourcePort":
+      case "sourcePort": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetPort = extractCopilotNetworkInfo(alert)
+        if (copilotNetPort.srcPort) return copilotNetPort.srcPort
+        
         // Wazuh stores as metadata.srcPort (camelCase)
         return (
           alert.metadata?.srcPort ||  // Wazuh primary
@@ -535,8 +733,13 @@ export function AlertTable({
           alert.srcPort ||
           "-"
         )
+      }
 
-      case "destinationPort":
+      case "destinationPort": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetPort = extractCopilotNetworkInfo(alert)
+        if (copilotNetPort.dstPort) return copilotNetPort.dstPort
+        
         // Wazuh stores as metadata.dstPort (camelCase)
         return (
           alert.metadata?.dstPort ||  // Wazuh primary
@@ -546,6 +749,7 @@ export function AlertTable({
           alert.dstPort ||
           "-"
         )
+      }
 
       case "protocol":
         // Wazuh stores as metadata.protocol
@@ -557,22 +761,25 @@ export function AlertTable({
         )
 
       case "processCmdLine": {
-        const meta = alert.metadata || {}
-        const v =
-          // prefer normalized metadata fields
-          meta.data_columns_cmdline ||
-          meta.process_cmd_line ||
-          meta.process_cmdline ||
-          // allow top-level alert fields
-          alert.process_cmd_line ||
-          alert.process_cmdline ||
-          // raw ES nested shapes
-          meta.raw_es?.data?.columns?.cmdline ||
-          meta.raw_es?.process_cmd_line ||
-          meta.raw_es?.process_cmdline ||
-          null
-
-        return v ? <p className="text-sm break-all font-mono">{String(v)}</p> : "-"
+        // Try Copilot first, then fallback to Wazuh
+        let cmd = extractCopilotCmdLine(alert)
+        if (!cmd) {
+          const meta = alert.metadata || {}
+          cmd =
+            // prefer normalized metadata fields
+            meta.data_columns_cmdline ||
+            meta.process_cmd_line ||
+            meta.process_cmdline ||
+            // allow top-level alert fields
+            alert.process_cmd_line ||
+            alert.process_cmdline ||
+            // raw ES nested shapes
+            meta.raw_es?.data?.columns?.cmdline ||
+            meta.raw_es?.process_cmd_line ||
+            meta.raw_es?.process_cmdline ||
+            ""
+        }
+        return cmd ? <p className="text-sm break-all font-mono">{String(cmd)}</p> : "-"
       }
 
       case "imageLoaded": {
@@ -602,7 +809,11 @@ export function AlertTable({
         return "-"
       }
 
-      case "agentName":
+      case "agentName": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotAgent = extractCopilotAgentInfo(alert)
+        if (copilotAgent.name) return copilotAgent.name
+        
         return (
           alert.metadata?.agent?.name ||
           alert.metadata?.agentName ||
@@ -610,8 +821,13 @@ export function AlertTable({
           alert.agent?.name ||
           "-"
         )
+      }
 
-      case "agentIp":
+      case "agentIp": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotAgent = extractCopilotAgentInfo(alert)
+        if (copilotAgent.ip) return copilotAgent.ip
+        
         return (
           alert.metadata?.agent?.ip ||
           alert.metadata?.agentIp ||
@@ -619,8 +835,13 @@ export function AlertTable({
           alert.agent?.ip ||
           "-"
         )
+      }
 
-      case "rule":
+      case "rule": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRule = extractCopilotRuleInfo(alert)
+        if (copilotRule.description) return copilotRule.description
+        
         return (
           alert.metadata?.rule?.description ||
           alert.metadata?.ruleDescription ||
@@ -628,8 +849,18 @@ export function AlertTable({
           alert.rule?.description ||
           "-"
         )
+      }
 
-      case "mitreTactic":
+      case "mitreTactic": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRule = extractCopilotRuleInfo(alert)
+        if (copilotRule.mitre?.tactic?.[0] || copilotRule.mitre?.tactic) {
+          const tactic = Array.isArray(copilotRule.mitre.tactic) 
+            ? copilotRule.mitre.tactic[0] 
+            : copilotRule.mitre.tactic
+          if (tactic) return tactic
+        }
+        
         return (
           alert.metadata?.rule?.mitre?.tactic?.[0] ||
           alert.metadata?.mitreTactic ||
@@ -637,8 +868,18 @@ export function AlertTable({
           alert.rule?.mitre?.tactic?.[0] ||
           "-"
         )
+      }
 
-      case "mitreId":
+      case "mitreId": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRule = extractCopilotRuleInfo(alert)
+        if (copilotRule.mitre?.id?.[0] || copilotRule.mitre?.id) {
+          const id = Array.isArray(copilotRule.mitre.id) 
+            ? copilotRule.mitre.id[0] 
+            : copilotRule.mitre.id
+          if (id) return id
+        }
+        
         return (
           alert.metadata?.rule?.mitre?.id?.[0] ||
           alert.metadata?.mitreId ||
@@ -646,23 +887,30 @@ export function AlertTable({
           alert.rule?.mitre?.id?.[0] ||
           "-"
         )
+      }
 
-      case "tags":
-        const tags = alert.metadata?.tags || alert.tags || []
+      case "tags": {
+        // Try Copilot first, then fallback to Wazuh
+        let tagsList = extractCopilotTags(alert)
+        if (tagsList.length === 0) {
+          tagsList = alert.metadata?.tags || alert.tags || []
+        }
+        
         return (
           <div className="flex flex-wrap gap-1">
-            {tags.slice(0, 2).map((tag: string, idx: number) => (
+            {tagsList.slice(0, 2).map((tag: string, idx: number) => (
               <Badge key={idx} variant="secondary" className="text-xs">
                 {tag}
               </Badge>
             ))}
-            {tags.length > 2 && (
+            {tagsList.length > 2 && (
               <Badge variant="secondary" className="text-xs">
-                +{tags.length - 2}
+                +{tagsList.length - 2}
               </Badge>
             )}
           </div>
         )
+      }
 
       default:
         return "-"
@@ -679,7 +927,11 @@ export function AlertTable({
       case "alertName":
         return alert.title || meta.rule?.description || meta.ruleDescription || alert.description || null
       case "srcip":
-      case "sourceIp":
+      case "sourceIp": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetRaw = extractCopilotNetworkInfo(alert)
+        if (copilotNetRaw.srcIp) return copilotNetRaw.srcIp
+        
         return (
           meta.srcIp ||
           meta.srcip ||
@@ -689,8 +941,13 @@ export function AlertTable({
           alert.srcip ||
           null
         )
+      }
       case "dstip":
-      case "destinationIp":
+      case "destinationIp": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetRaw = extractCopilotNetworkInfo(alert)
+        if (copilotNetRaw.dstIp) return copilotNetRaw.dstIp
+        
         return (
           meta.dstIp ||
           meta.dstip ||
@@ -700,6 +957,7 @@ export function AlertTable({
           alert.dstip ||
           null
         )
+      }
       case "responseCode":
       case "response_code":
         // Prefer parsed network extraction (from message payload), then fall back to metadata/raw_es
@@ -741,24 +999,74 @@ export function AlertTable({
         return alert.severity || null
       case "status":
         return alert.status || null
-      case "sourcePort":
+      case "sourcePort": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetPortRaw = extractCopilotNetworkInfo(alert)
+        if (copilotNetPortRaw.srcPort) return copilotNetPortRaw.srcPort
+        
         return meta.srcPort || meta.src_port || meta.srcport || alert.srcPort || null
-      case "destinationPort":
+      }
+      case "destinationPort": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotNetPortRaw = extractCopilotNetworkInfo(alert)
+        if (copilotNetPortRaw.dstPort) return copilotNetPortRaw.dstPort
+        
         return meta.dstPort || meta.dst_port || meta.dstport || alert.dstPort || null
+      }
       case "protocol":
         return meta.protocol || meta.http_method || alert.protocol || null
-      case "agentName":
+      case "agentName": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotAgentRaw = extractCopilotAgentInfo(alert)
+        if (copilotAgentRaw.name) return copilotAgentRaw.name
+        
         return meta.agent?.name || meta.agentName || meta.agent_name || alert.agent?.name || null
-      case "agentIp":
+      }
+      case "agentIp": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotAgentRaw = extractCopilotAgentInfo(alert)
+        if (copilotAgentRaw.ip) return copilotAgentRaw.ip
+        
         return meta.agent?.ip || meta.agentIp || meta.agent_ip || alert.agent?.ip || null
-      case "rule":
+      }
+      case "rule": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRuleRaw = extractCopilotRuleInfo(alert)
+        if (copilotRuleRaw.description) return copilotRuleRaw.description
+        
         return meta.rule?.description || meta.ruleDescription || meta.rule_description || alert.rule?.description || null
-      case "mitreTactic":
+      }
+      case "mitreTactic": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRuleRaw = extractCopilotRuleInfo(alert)
+        if (copilotRuleRaw.mitre?.tactic) {
+          const tactic = Array.isArray(copilotRuleRaw.mitre.tactic) 
+            ? copilotRuleRaw.mitre.tactic[0] 
+            : copilotRuleRaw.mitre.tactic
+          if (tactic) return tactic
+        }
+        
         return meta.rule?.mitre?.tactic?.[0] || meta.mitreTactic || null
-      case "mitreId":
+      }
+      case "mitreId": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotRuleRaw = extractCopilotRuleInfo(alert)
+        if (copilotRuleRaw.mitre?.id) {
+          const id = Array.isArray(copilotRuleRaw.mitre.id) 
+            ? copilotRuleRaw.mitre.id[0] 
+            : copilotRuleRaw.mitre.id
+          if (id) return id
+        }
+        
         return meta.rule?.mitre?.id?.[0] || meta.mitreId || null
-      case "tags":
+      }
+      case "tags": {
+        // Try Copilot first, then fallback to Wazuh
+        const copilotTagsRaw = extractCopilotTags(alert)
+        if (copilotTagsRaw.length > 0) return copilotTagsRaw.join(", ")
+        
         return (meta.tags || alert.tags || []).join(", ") || null
+      }
       case "imageLoaded":
         return (
           meta.data_win_eventdata_image ||
@@ -813,6 +1121,10 @@ export function AlertTable({
           null
         )
       case "processCmdLine": {
+        // Try Copilot first, then fallback to Wazuh
+        const cmd = extractCopilotCmdLine(alert)
+        if (cmd) return cmd
+        
         return (
           meta.data_columns_cmdline ||
           meta.process_cmd_line ||

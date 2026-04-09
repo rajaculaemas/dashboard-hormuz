@@ -145,11 +145,19 @@ function formatMTTD(alert: any) {
   try {
     if (alert.status === 'New') return ''
     const md = alert.metadata || {}
-    const stellarMttdMs = md.user_action_alert_to_first || (md.user_action && md.user_action.alert_to_first)
-    if (stellarMttdMs !== null && stellarMttdMs !== undefined) {
-      const mttdMinutes = Math.round(stellarMttdMs / (60 * 1000))
+    
+    // Try Stellar Cyber first
+    let mttdMs = md.user_action_alert_to_first || (md.user_action && md.user_action.alert_to_first)
+    
+    // Try Socfortress/Copilot
+    if (!mttdMs) {
+      mttdMs = md.socfortress_alert_to_first
+    }
+    
+    if (mttdMs !== null && mttdMs !== undefined) {
+      const mttdMinutes = Math.round(mttdMs / (60 * 1000))
       if (mttdMinutes < 1) {
-        const mttdSeconds = Math.round(stellarMttdMs / 1000)
+        const mttdSeconds = Math.round(mttdMs / 1000)
         return mttdSeconds >= 0 ? `${mttdSeconds}s` : ''
       }
       if (mttdMinutes < 60) return `${mttdMinutes}m`
@@ -158,6 +166,8 @@ function formatMTTD(alert: any) {
       const mttdDays = Math.floor(mttdHours / 24)
       return `${mttdDays}d`
     }
+    
+    // Fallback to timestamp - updatedAt if no calculated MTTD
     const eventTime = new Date(alert.timestamp || alert.created_at)
     const actionTime = new Date(alert.updatedAt || alert.updated_at)
     if (!eventTime.getTime() || !actionTime.getTime()) return ''

@@ -184,7 +184,7 @@ export function IntegrationCard({ integration, onEdit, canManage = true }: Integ
                     <RefreshCw className="h-4 w-4 mr-2" />
                     Test Connection
                   </DropdownMenuItem>
-                  {integration.source === "stellar-cyber" && (
+                  {(integration.source === "stellar-cyber" || integration.source === "socfortress") && (
                     <DropdownMenuItem onClick={handleSync}>
                       <Download className="h-4 w-4 mr-2" />
                       Sync Alerts
@@ -261,7 +261,7 @@ export function IntegrationCard({ integration, onEdit, canManage = true }: Integ
               <Edit className="h-4 w-4 mr-2" />
               Edit
             </Button>
-            {integration.source === "stellar-cyber" ? (
+            {integration.source === "stellar-cyber" || integration.source === "socfortress" ? (
               <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing}>
                 <Download className={`h-4 w-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
                 {isSyncing ? "Syncing..." : "Sync Alerts"}

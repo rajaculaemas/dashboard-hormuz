@@ -243,6 +243,7 @@ export async function GET(request: NextRequest) {
       console.log("[DEBUG] First alert metadata keys:", Object.keys(firstAlert.metadata || {}).sort())
       console.log("[DEBUG] First alert has user_action:", !!(firstAlert.metadata?.user_action))
       console.log("[DEBUG] First alert user_action keys:", Object.keys(firstAlert.metadata?.user_action || {}).sort())
+      console.log("[DEBUG] First alert tags:", firstAlert.metadata?.tags)
     }
 
     return NextResponse.json({

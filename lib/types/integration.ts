@@ -7,6 +7,8 @@ export type IntegrationSource =
   | "antivirus"
   | "qradar"
   | "wazuh"
+  | "socfortress"
+  | "copilot"
   | "waf"
   | "endpoint"
   | "siem"

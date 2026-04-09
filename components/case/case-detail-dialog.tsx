@@ -23,6 +23,7 @@ import { SafeDate } from "@/components/ui/safe-date"
 import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
 import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-dialog"
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
+import { SocfortressAlertDetailDialog } from "@/components/alert/socfortress-alert-detail-dialog"
 import { EventDetailDialog } from "@/components/alert/event-detail-dialog"
 import { ASSIGNEES } from "@/components/case/case-action-dialog"
 
@@ -64,6 +65,7 @@ interface CaseDetail {
     name: string
     source?: string
   }
+  alerts?: any[]
 }
 
 interface Alert {
@@ -116,8 +118,44 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     return integration?.source === "wazuh" || name.includes("wazuh")
   }
 
+  const isSocfortressIntegration = (integration?: { source?: string; name?: string }) => {
+    const name = integration?.name?.toLowerCase?.() || ""
+    return integration?.source === "socfortress" || integration?.source === "copilot" || name.includes("socfortress") || name.includes("copilot")
+  }
+
   useEffect(() => {
     if (open && caseData) {
+      console.log("[CaseDetail] Dialog opened with caseData:", { 
+        id: caseData.id, 
+        name: caseData.name,
+        integration: caseData.integration?.source,
+        alerts: caseData.alerts?.length || 0,
+        hasMetadata: !!caseData.metadata
+      })
+      
+      // DETAILED logging for case 77
+      if (caseData.id === '77' || caseData.id === 77) {
+        console.log("[CaseDetail] === CASE 77 DEBUG ===")
+        console.log("[CaseDetail] Case 77 FULL object keys:", Object.keys(caseData))
+        console.log("[CaseDetail] Case 77 metadata exists:", !!caseData.metadata)
+        console.log("[CaseDetail] Case 77 metadata:", caseData.metadata)
+        console.log("[CaseDetail] Case 77 metadata type:", typeof caseData.metadata)
+        console.log("[CaseDetail] Case 77 metadata IS NULL:", caseData.metadata === null)
+        console.log("[CaseDetail] Case 77 metadata IS UNDEFINED:", caseData.metadata === undefined)
+        
+        // Log the entire caseData object
+        const cloned = JSON.parse(JSON.stringify(caseData))
+        console.log("[CaseDetail] Case 77 FULL object (stringified):", cloned)
+        
+        if (caseData.metadata) {
+          console.log("[CaseDetail] Case 77 metadata keys:", Object.keys(caseData.metadata || {}).join(", "))
+          console.log("[CaseDetail] Case 77 metadata.case_history:", (caseData as any).metadata.case_history)
+          console.log("[CaseDetail] Case 77 metadata.case_history length:", (caseData as any).metadata.case_history?.length || 0)
+        }
+      }
+      
+      console.log("[CaseDetail] caseData.metadata field directly:", caseData.metadata)
+      console.log("[CaseDetail] caseData all fields:", Object.getOwnPropertyNames(caseData).slice(0, 20))
       setCaseDetail(caseData)
       fetchCaseDetails(caseData.id)
       fetchCaseAlerts(caseData.id)
@@ -143,8 +181,17 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     // Fetch fresh case details from server to ensure we have latest data
     // especially for status, assignee, and timestamps
     try {
-      // Determine if this is a Wazuh case based on integration source
+      // Determine if this is a Wazuh or SOCFortress case based on integration source
       const isWazuh = isWazuhIntegration(caseData?.integration)
+      const isSocfortress = isSocfortressIntegration(caseData?.integration)
+      
+      console.log("Fetching case details - id:", id, "isWazuh:", isWazuh, "isSocfortress:", isSocfortress)
+      console.log("caseData available:", !!caseData, "caseData.alerts:", caseData?.alerts?.length || 0)
+      
+      // NOTE: REMOVED early return for SOCFortress - must fetch from API to get complete metadata (case_history)!
+      // Even for SOCFortress, we need to fetch from API to ensure we have:
+      // - Complete metadata including case_history for timeline
+      // - Latest case status and assignments
       
       let endpoint = `/api/cases/${id}`
       if (isWazuh) {
@@ -154,6 +201,8 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       console.log("Fetching case details from:", endpoint)
       const response = await fetch(endpoint)
       const data = await response.json()
+      
+      console.log("API response for case:", { isWazuh, isSocfortress, dataKeys: Object.keys(data), caseCount: data.cases?.length || data.data ? 1 : 0 })
       
       if (isWazuh && data.cases && data.cases[0]) {
         // For Wazuh, the API returns an array of cases, so take the first one
@@ -187,10 +236,23 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
         console.log("Fetched Wazuh case details:", transformedCase)
         setCaseDetail(transformedCase)
       } else if (data.success && data.data) {
-        setCaseDetail(data.data)
+        // For Stellar Cyber and other sources (via /api/cases endpoint)
+        const caseDetail = data.data
+        console.log("Fetched case details from /api/cases:", { caseId: caseDetail.id, alerts: caseDetail.alerts?.length || 0 })
+        setCaseDetail(caseDetail)
+      } else {
+        // No recognized response format, fall back to caseData if available
+        console.warn("Unexpected API response format, falling back to caseData")
+        if (caseData) {
+          setCaseDetail(caseData)
+        }
       }
     } catch (error) {
       console.error("Failed to fetch case details:", error)
+      // Fallback to caseData that was passed
+      if (caseData) {
+        setCaseDetail(caseData)
+      }
     }
   }
 
@@ -200,8 +262,16 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     setAlertsLoading(true)
     try {
       console.log("Frontend: Fetching alerts for case:", id)
-      console.log("Frontend: Integration source:", caseDetail?.integration?.source)
-      console.log("Frontend: caseDetail available:", !!caseDetail)
+      console.log("Frontend: caseDetail state:", { 
+        available: !!caseDetail,
+        alerts: caseDetail?.alerts?.length || 0,
+        integration: caseDetail?.integration?.source
+      })
+      console.log("Frontend: caseData prop:", { 
+        available: !!caseData,
+        alerts: caseData?.alerts?.length || 0,
+        integration: caseData?.integration?.source
+      })
 
       // Check if this is a Wazuh case
       if (isWazuhIntegration(caseDetail?.integration ?? caseData?.integration)) {
@@ -382,6 +452,58 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
             }
           }
         }
+      } else if (isSocfortressIntegration(caseDetail?.integration ?? caseData?.integration)) {
+        // For SOCFortress cases, always handle here (alerts may be in caseDetail or empty)
+        console.log("Frontend: This is a SOCFortress case")
+        console.log("Frontend: caseDetail?.alerts:", caseDetail?.alerts?.length || 0, "caseData?.alerts:", caseData?.alerts?.length || 0)
+        
+        // Use caseDetail if available, otherwise fall back to caseData
+        const sourceData = caseDetail?.alerts ? caseDetail : caseData
+        
+        if (sourceData?.alerts && Array.isArray(sourceData.alerts) && sourceData.alerts.length > 0) {
+          console.log("Frontend: Found", sourceData.alerts.length, "SOCFortress alerts from", caseDetail?.alerts ? "caseDetail" : "caseData")
+          
+          const transformedAlerts = sourceData.alerts.map((caseAlert: any) => {
+            const alert = caseAlert.alert || caseAlert;
+            console.log("Frontend: Processing SOCFortress alert:", alert.title || alert.alert_name)
+            
+            // Preserve and augment metadata
+            const meta = Object.assign({}, alert.metadata || {})
+            if (!meta.data_id) meta.data_id = alert.data_id || alert.dataId || alert.metadata?.data_id || alert.metadata?.dataId || undefined
+            if (!meta.hash_sha256 && alert.hash_sha256) meta.hash_sha256 = alert.hash_sha256
+            if (!meta.md5 && alert.md5) meta.md5 = alert.md5
+            if (!meta.sha1 && alert.sha1) meta.sha1 = alert.sha1
+            
+            return {
+              _id: alert.id || alert._id,
+              alert_name: alert.title || alert.name || "Unknown Alert",
+              xdr_event: {
+                display_name: alert.title || alert.name || "Unknown Alert",
+              },
+              severity: alert.severity || "Unknown",
+              alert_time: alert.timestamp ? new Date(alert.timestamp).getTime() : (alert.alert_time || 0),
+              status: alert.status || "Unknown",
+              source_ip: alert.metadata?.srcIp || alert.metadata?.srcip || alert.source_ip,
+              dest_ip: alert.metadata?.dstIp || alert.metadata?.dstip || alert.dest_ip,
+              description: alert.description || "",
+              metadata: meta,
+              id: alert.id,
+              externalId: alert.externalId,
+              title: alert.title,
+              timestamp: alert.timestamp,
+              // Include SOCFortress-specific fields
+              tags: alert.tags || [],
+              assigned_to: alert.assigned_to,
+              case_id: alert.case_id,
+            }
+          })
+          
+          setAlerts(transformedAlerts)
+          console.log("Frontend: Successfully set SOCFortress alerts:", transformedAlerts.length)
+        } else {
+          console.log("Frontend: No alerts in SOCFortress case from", caseDetail?.alerts ? "caseDetail" : "caseData")
+          setAlerts([])
+        }
       } else {
         // For other integrations, use original API
         console.log("Frontend: Using original API for non-Wazuh case")
@@ -543,23 +665,162 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     }
   }
 
+  // Helper function to parse MySQL datetime (format: "2026-02-02 04:14:35")
+  const parseMySQLDateTime = (dateString: string): Date => {
+    if (!dateString) return new Date()
+    try {
+      // MySQL format: "2026-02-02 04:14:35" - replace space with T to make it ISO-like
+      const isoString = dateString.replace(" ", "T")
+      const date = new Date(isoString)
+      if (!isNaN(date.getTime())) {
+        return date
+      }
+    } catch (e) {
+      console.warn("Failed to parse datetime:", dateString)
+    }
+    return new Date()
+  }
+
   const fetchCaseTimeline = async (id: string) => {
     if (!id) return
 
     setTimelineLoading(true)
     try {
       console.log("Frontend: Fetching timeline for case:", id)
-      const response = await fetch(`/api/cases/${id}/timeline`)
-      const data = await response.json()
-
-      console.log("Frontend: Timeline response:", data)
-
-      if (data.success && data.data) {
-        setTimelineEvents(data.data)
-        console.log("Frontend: Successfully set timeline events:", data.data.length)
+      const isSocfortress = isSocfortressIntegration(caseDetail?.integration ?? caseData?.integration)
+      console.log("Frontend: isSocfortress:", isSocfortress, "caseDetail exists:", !!caseDetail)
+      console.log("Frontend: caseDetail object:", { id: caseDetail?.id, name: caseDetail?.name, createdAt: caseDetail?.createdAt, timestamp: caseDetail?.timestamp })
+      console.log("Frontend: caseData object:", { id: caseData?.id, name: caseData?.name, createdAt: caseData?.createdAt, timestamp: caseData?.timestamp })
+      console.log("Frontend: alerts array:", alerts?.length || 0, "items")
+      
+      // For SOCFortress cases, always build timeline from caseDetail and alerts (don't use API)
+      if (isSocfortress) {
+        console.log("Frontend: Building SOCFortress timeline from caseDetail, alerts, and case history")
+        const timelineEvents: any[] = []
+        
+        // Determine case creation timestamp - try multiple sources
+        let caseCreatedTime = 0
+        if (caseDetail?.createdAt) {
+          const parsed = new Date(caseDetail.createdAt).getTime()
+          caseCreatedTime = !isNaN(parsed) ? parsed : 0
+        } else if (caseDetail?.timestamp) {
+          const parsed = new Date(caseDetail.timestamp).getTime()
+          caseCreatedTime = !isNaN(parsed) ? parsed : 0
+        } else if (caseData?.createdAt) {
+          const parsed = new Date(caseData.createdAt).getTime()
+          caseCreatedTime = !isNaN(parsed) ? parsed : 0
+        } else if (caseData?.timestamp) {
+          const parsed = new Date(caseData.timestamp).getTime()
+          caseCreatedTime = !isNaN(parsed) ? parsed : 0
+        }
+        
+        // Event 1: Case created
+        if (caseCreatedTime > 0) {
+          const caseName = caseDetail?.name || caseData?.name || "Unknown Case"
+          timelineEvents.push({
+            eventId: `case-created-${caseDetail?.id || caseData?.id}`,
+            timestamp: caseCreatedTime,
+            title: "Case Created",
+            description: `Case "${caseName}" was created`,
+            eventType: "created",
+            metadata: {
+              caseId: caseDetail?.id || caseData?.id,
+              caseName: caseName,
+            }
+          })
+          console.log("Frontend: Added case created event at:", new Date(caseCreatedTime).toISOString())
+        } else {
+          console.warn("Frontend: Could not determine case creation timestamp")
+        }
+        
+        // Event 2: Case history entries (status changes, assignments, comments, etc.)
+        console.log("Frontend: Checking metadata sources:")
+        console.log("  caseDetail?.metadata:", caseDetail?.metadata)
+        console.log("  caseData?.metadata:", caseData?.metadata)
+        const caseHistory = caseDetail?.metadata?.case_history || caseData?.metadata?.case_history || []
+        console.log("Frontend: Processing case history entries:", caseHistory.length)
+        if (caseHistory.length > 0) {
+          console.log("Frontend: First history entry:", caseHistory[0])
+        }
+        
+        if (Array.isArray(caseHistory) && caseHistory.length > 0) {
+          caseHistory.forEach((historyEntry: any, idx: number) => {
+            // Use helper function to parse MySQL datetime format
+            const parsedDate = parseMySQLDateTime(historyEntry.changed_at)
+            const timestamp = parsedDate.getTime()
+            
+            let title = ""
+            let description = ""
+            let eventType = "modified"
+            
+            // Map change_type to human-readable title and description
+            if (historyEntry.change_type === "STATUS_CHANGE") {
+              title = "Status Changed"
+              description = `Status: ${historyEntry.old_value || "Unknown"} → ${historyEntry.new_value || "Unknown"}`
+              eventType = "status_change"
+            } else if (historyEntry.change_type === "ASSIGNMENT_CHANGE") {
+              title = "Assignment Changed"
+              description = `Assigned: ${historyEntry.old_value || "Unassigned"} → ${historyEntry.new_value || "Unassigned"}`
+              eventType = "assignee_change"
+            } else if (historyEntry.change_type === "COMMENT_ADDED") {
+              title = "Comment Added"
+              description = `Added by ${historyEntry.changed_by || "System"}`
+              eventType = "modified"
+            } else if (historyEntry.change_type === "COMMENT_EDITED") {
+              title = "Comment Edited"
+              description = `Updated by ${historyEntry.changed_by || "System"}`
+              eventType = "modified"
+            } else if (historyEntry.change_type === "SEVERITY_CHANGE") {
+              title = "Severity Changed"
+              description = `Severity: ${historyEntry.old_value || "Unknown"} → ${historyEntry.new_value || "Unknown"}`
+              eventType = "severity_change"
+            } else {
+              title = historyEntry.change_type || "Case Modified"
+              description = historyEntry.description || `${historyEntry.field_name} changed`
+              eventType = "modified"
+            }
+            
+            timelineEvents.push({
+              eventId: `case-history-${idx}-${historyEntry.id}`,
+              timestamp,
+              title,
+              description,
+              eventType,
+              metadata: {
+                changeType: historyEntry.change_type,
+                fieldName: historyEntry.field_name,
+                oldValue: historyEntry.old_value,
+                newValue: historyEntry.new_value,
+                changedBy: historyEntry.changed_by,
+                changedAt: historyEntry.changed_at,
+              }
+            })
+          })
+        }
+        
+        // Note: Alert linked events are NOT included in timeline
+        // Alerts are displayed separately in the "Related Alerts" section
+        
+        // Sort timeline events by timestamp (descending = newest first)
+        timelineEvents.sort((a, b) => b.timestamp - a.timestamp)
+        
+        setTimelineEvents(timelineEvents)
+        console.log("Frontend: Successfully built SOCFortress timeline events:", timelineEvents.length, "Events:", timelineEvents.map(e => ({ title: e.title, time: new Date(e.timestamp).toLocaleString() })))
       } else {
-        console.error("Frontend: Failed to fetch timeline:", data.error || "Unknown error")
-        setTimelineEvents([])
+        // For other integrations, use the API endpoint
+        console.log("Frontend: Fetching timeline from API for non-SOCFortress case")
+        const response = await fetch(`/api/cases/${id}/timeline`)
+        const data = await response.json()
+
+        console.log("Frontend: Timeline response:", data)
+
+        if (data.success && data.data) {
+          setTimelineEvents(data.data)
+          console.log("Frontend: Successfully set timeline events:", data.data.length)
+        } else {
+          console.error("Frontend: Failed to fetch timeline:", data.error || "Unknown error")
+          setTimelineEvents([])
+        }
       }
     } catch (error) {
       console.error("Frontend: Error fetching case timeline:", error)
@@ -750,19 +1011,22 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     if (timelineEvents && timelineEvents.length > 0) {
       timelineEvents.forEach((event: any) => {
         const eventTypeMap: Record<string, string> = {
-          created: "create",
-          status_change: "modify",
-          assignee_change: "modify",
-          severity_change: "modify",
-          resolved: "close",
-          closed: "close",
-          acknowledged: "acknowledge",
-          modified: "modify",
-          updated: "modify",
+          created: "created",
+          case_creation: "created",
+          status_change: "status_change",
+          assignee_change: "assignee_change",
+          severity_change: "severity_change",
+          resolved: "closed",
+          closed: "closed",
+          acknowledged: "acknowledged",
+          modified: "modified",
+          updated: "modified",
+          alert_linked: "alert_linked",
         }
 
         const titleMap: Record<string, string> = {
           created: "Case Created",
+          case_creation: "Case Created",
           status_change: "Status Changed",
           assignee_change: "Assignee Changed",
           severity_change: "Severity Changed",
@@ -771,16 +1035,26 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           acknowledged: "Case Acknowledged",
           modified: "Case Modified",
           updated: "Case Updated",
+          alert_linked: "Alert Linked",
+        }
+
+        // Enhance description with metadata details
+        let enhancedDescription = event.description
+        if (event.metadata) {
+          if (event.metadata.oldValue !== undefined && event.metadata.newValue !== undefined) {
+            enhancedDescription = `${event.metadata.oldValue || "Unknown"} → ${event.metadata.newValue || "Unknown"}`
+          }
         }
 
         events.push({
-          type: event.eventType,
+          type: eventTypeMap[event.eventType] || event.eventType,
           timestamp: new Date(event.timestamp),
           title: titleMap[event.eventType] || "Updated",
-          description: event.description,
-          changedBy: event.changedBy,
+          description: enhancedDescription,
+          changedBy: event.metadata?.changedBy,
           changedByUser: event.changedByUser,
-          icon: eventTypeMap[event.eventType] || "modify",
+          metadata: event.metadata,
+          icon: eventTypeMap[event.eventType] || "modified",
         })
       })
     } else {
@@ -856,21 +1130,32 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       })
     }
 
-    // Sort by timestamp ascending (oldest first)
-    return events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    // Sort by timestamp descending (newest first)
+    return events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
   }
 
   const getEventIcon = (type: string) => {
     switch (type) {
       case "created":
+      case "case_creation":
         return "w-2 h-2 bg-blue-500 rounded-full mt-2"
       case "acknowledged":
         return "w-2 h-2 bg-yellow-500 rounded-full mt-2"
       case "comment":
         return "w-2 h-2 bg-green-500 rounded-full mt-2"
       case "modified":
+      case "modified":
         return "w-2 h-2 bg-orange-500 rounded-full mt-2"
+      case "status_change":
+        return "w-2 h-2 bg-purple-500 rounded-full mt-2"
+      case "severity_change":
+        return "w-2 h-2 bg-red-500 rounded-full mt-2"
+      case "assignee_change":
+        return "w-2 h-2 bg-cyan-500 rounded-full mt-2"
+      case "alert_linked":
+        return "w-2 h-2 bg-amber-500 rounded-full mt-2"
       case "closed":
+      case "resolved":
         return "w-2 h-2 bg-gray-500 rounded-full mt-2"
       default:
         return "w-2 h-2 bg-gray-400 rounded-full mt-2"
@@ -971,6 +1256,29 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                                 <Badge variant="outline">Not Set</Badge>
                               )}
                             </div>
+                            {(caseDetail.integration?.source === "socfortress" || caseDetail.integration?.name?.toLowerCase().includes("socfortress")) && caseDetail.metadata?.mttrMinutes !== null && caseDetail.metadata?.mttrMinutes !== undefined && (
+                              <div>
+                                <label className="text-sm font-medium text-muted-foreground">MTTR</label>
+                                {(() => {
+                                  const mttrMinutes = caseDetail.metadata.mttrMinutes
+                                  const severityThresholds: Record<string, number> = {
+                                    Critical: 15,
+                                    High: 30,
+                                    Medium: 60,
+                                    Low: 120,
+                                  }
+                                  const threshold = severityThresholds[caseDetail.severity] || 120
+                                  const breached = mttrMinutes > threshold
+                                  
+                                  return (
+                                    <Badge variant={breached ? "destructive" : "secondary"} className="gap-1">
+                                      <ClockIcon className="h-3 w-3" />
+                                      {mttrMinutes}m {breached && "(SLA Breached)"}
+                                    </Badge>
+                                  )
+                                })()}
+                              </div>
+                            )}
                             <div>
                               <label className="text-sm font-medium text-muted-foreground">Score</label>
                               <p className="text-sm font-medium">{caseDetail.score}</p>
@@ -1290,70 +1598,176 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
               </TabsContent>
 
               <TabsContent value="timeline" className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <MessageSquareIcon className="h-5 w-5" />
-                        Case Timeline
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          fetchCaseComments(caseDetail.id)
-                          fetchCaseTimeline(caseDetail.id)
-                        }}
-                        disabled={commentsLoading || timelineLoading}
-                      >
-                        <RefreshCwIcon className={`h-4 w-4 mr-2 ${commentsLoading || timelineLoading ? "animate-spin" : ""}`} />
-                        Refresh
-                      </Button>
-                    </CardTitle>
-                    <CardDescription>Chronological history of case events and updates</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {commentsLoading || timelineLoading ? (
-                      <div className="flex items-center justify-center py-8">
-                        <RefreshCwIcon className="h-8 w-8 animate-spin" />
-                        <p className="ml-2 text-muted-foreground">Loading timeline...</p>
-                      </div>
-                    ) : (
-                      <ScrollArea className="h-[400px]">
+                {isSocfortressIntegration(caseDetail?.integration) ? (
+                  // SOCFortress: Direct case_history display (like alert timeline)
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MessageSquareIcon className="h-5 w-5" />
+                          Case Change History
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            fetchCaseComments(caseDetail.id)
+                            fetchCaseTimeline(caseDetail.id)
+                          }}
+                          disabled={commentsLoading || timelineLoading}
+                        >
+                          <RefreshCwIcon className={`h-4 w-4 mr-2 ${commentsLoading || timelineLoading ? "animate-spin" : ""}`} />
+                          Refresh
+                        </Button>
+                      </CardTitle>
+                      <CardDescription>Timeline of all changes to this case</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {/* DEBUG: Log metadata presence */}
+                      {(() => {
+                        console.log("[Timeline] Rendering SOCFortress case timeline")
+                        console.log("[Timeline] caseDetail exists:", !!caseDetail)
+                        console.log("[Timeline] caseDetail.metadata exists:", !!caseDetail?.metadata)
+                        console.log("[Timeline] caseDetail.metadata.case_history exists:", !!caseDetail?.metadata?.case_history)
+                        console.log("[Timeline] caseDetail.metadata.case_history length:", caseDetail?.metadata?.case_history?.length || 0)
+                        if (caseDetail?.metadata?.case_history) {
+                          console.log("[Timeline] First case_history entry:", caseDetail.metadata.case_history[0])
+                        }
+                        return null
+                      })()}
+                      {caseDetail?.metadata?.case_history && caseDetail.metadata.case_history.length > 0 ? (
                         <div className="space-y-4">
-                          {getTimelineEvents().map((event, index) => (
-                            <div key={index} className="flex items-start gap-3">
-                              <div className={getEventIcon(event.type)}></div>
-                              <div className="flex-1">
-                                <div className="flex items-center justify-between">
-                                  <p className="text-sm font-medium">{event.title}</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    <SafeDate date={event.timestamp} />
-                                  </p>
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1">{event.description}</p>
-                                {event.changedBy && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    by{event.changedByUser?.name ? ` ${event.changedByUser.name}` : ` ${event.changedBy}`}
-                                  </p>
+                          {caseDetail.metadata.case_history.map((entry: any, index: number) => (
+                            <div key={index} className="flex gap-4 pb-4 border-b last:border-0">
+                              {/* Timeline indicator */}
+                              <div className="flex flex-col items-center gap-2">
+                                <div className={`w-3 h-3 rounded-full border-2 ${
+                                  entry.change_type === "STATUS_CHANGE" ? "bg-blue-500 border-blue-500" :
+                                  entry.change_type === "ASSIGNMENT_CHANGE" ? "bg-purple-500 border-purple-500" :
+                                  entry.change_type === "SEVERITY_CHANGE" ? "bg-orange-500 border-orange-500" :
+                                  entry.change_type === "COMMENT_ADDED" ? "bg-green-500 border-green-500" :
+                                  "bg-gray-500 border-gray-500"
+                                }`} />
+                                {index !== caseDetail.metadata.case_history.length - 1 && (
+                                  <div className="w-0.5 h-8 bg-gray-300" />
                                 )}
-                                {event.author && (
-                                  <p className="text-xs text-muted-foreground mt-1">by {event.author}</p>
+                              </div>
+                              
+                              {/* Content */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-start justify-between gap-2 mb-2">
+                                  <div>
+                                    <div className="font-semibold text-sm">{entry.change_type}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {entry.changed_at ? new Date(entry.changed_at).toLocaleString() : "No date"}
+                                    </div>
+                                  </div>
+                                  {entry.changed_by && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {entry.changed_by}
+                                    </Badge>
+                                  )}
+                                </div>
+                                
+                                {entry.description && (
+                                  <p className="text-sm text-foreground mb-2">{entry.description}</p>
+                                )}
+                                
+                                {entry.field_name && (
+                                  <div className="text-xs space-y-1 bg-muted/50 p-2 rounded">
+                                    <div><span className="font-medium">Field:</span> {entry.field_name}</div>
+                                    {entry.old_value !== undefined && entry.old_value !== null && (
+                                      <div><span className="font-medium">From:</span> <code className="bg-background px-1 rounded">{String(entry.old_value).substring(0, 100)}</code></div>
+                                    )}
+                                    {entry.new_value !== undefined && entry.new_value !== null && (
+                                      <div><span className="font-medium">To:</span> <code className="bg-background px-1 rounded">{String(entry.new_value).substring(0, 100)}</code></div>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>
                           ))}
-                          {getTimelineEvents().length === 0 && (
-                            <div className="text-center py-8">
-                              <MessageSquareIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                              <p className="text-muted-foreground">No timeline events found</p>
-                            </div>
-                          )}
                         </div>
-                      </ScrollArea>
-                    )}
-                  </CardContent>
-                </Card>
+                      ) : (
+                        <div className="text-center py-8">
+                          <MessageSquareIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                          <p className="text-muted-foreground">No case history available</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  // Other integrations: Complex timeline
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MessageSquareIcon className="h-5 w-5" />
+                          Case Timeline
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            fetchCaseComments(caseDetail.id)
+                            fetchCaseTimeline(caseDetail.id)
+                          }}
+                          disabled={commentsLoading || timelineLoading}
+                        >
+                          <RefreshCwIcon className={`h-4 w-4 mr-2 ${commentsLoading || timelineLoading ? "animate-spin" : ""}`} />
+                          Refresh
+                        </Button>
+                      </CardTitle>
+                      <CardDescription>Chronological history of case events and updates</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {commentsLoading || timelineLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                          <RefreshCwIcon className="h-8 w-8 animate-spin" />
+                          <p className="ml-2 text-muted-foreground">Loading timeline...</p>
+                        </div>
+                      ) : (
+                        <ScrollArea className="h-[400px]">
+                          <div className="space-y-4">
+                            {getTimelineEvents().map((event, index) => (
+                              <div key={index} className="flex items-start gap-3 pb-4 border-b last:border-b-0">
+                                <div className={getEventIcon(event.type)}></div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold">{event.title}</p>
+                                    <p className="text-xs text-muted-foreground whitespace-nowrap">
+                                      <SafeDate date={event.timestamp} />
+                                    </p>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground mt-1">{event.description}</p>
+                                  {event.changedBy && (
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                      by {event.changedByUser?.name ? `${event.changedByUser.name}` : `${event.changedBy}`}
+                                    </p>
+                                  )}
+                                  {event.metadata?.fieldName && (
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                      Field: {event.metadata.fieldName}
+                                    </p>
+                                  )}
+                                  {event.author && (
+                                    <p className="text-xs text-muted-foreground mt-1">by {event.author}</p>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                            {getTimelineEvents().length === 0 && (
+                              <div className="text-center py-8">
+                                <MessageSquareIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                                <p className="text-muted-foreground">No timeline events found</p>
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </TabsContent>
             </Tabs>
           ) : (
@@ -1366,7 +1780,9 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       </Dialog>
 
       {/* Show appropriate alert detail dialog based on integration type and alert type */}
-      {isWazuhIntegration(caseDetail?.integration) ? (
+      {isSocfortressIntegration(caseDetail?.integration) ? (
+        <SocfortressAlertDetailDialog open={alertDetailOpen} onOpenChange={setAlertDetailOpen} alert={selectedAlert} />
+      ) : isWazuhIntegration(caseDetail?.integration) ? (
         <WazuhAlertDetailDialog open={alertDetailOpen} onOpenChange={setAlertDetailOpen} alert={selectedAlert} />
       ) : caseDetail?.integration?.source === "qradar" && selectedAlert?.isEvent ? (
         <EventDetailDialog open={alertDetailOpen} onOpenChange={setAlertDetailOpen} event={selectedAlert} />

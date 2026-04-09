@@ -26,6 +26,8 @@ export async function GET(
         email: true,
         name: true,
         role: true,
+        position: true,
+        telegramChatId: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -62,7 +64,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { name, role, status, password, integrationIds } = body;
+    const { name, role, position, telegramChatId, status, password, integrationIds } = body;
 
     // Check if user exists
     const targetUser = await prisma.user.findUnique({
@@ -86,9 +88,16 @@ export async function PUT(
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     
-    // Only admin dapat update role dan status
+    // User dapat update telegramChatId mereka sendiri
+    if (isUpdatingSelf && telegramChatId !== undefined) {
+      updateData.telegramChatId = telegramChatId;
+    }
+    
+    // Only admin dapat update role, position dan status
     if (isAdmin) {
       if (role !== undefined) updateData.role = role;
+      if (position !== undefined) updateData.position = position;
+      if (telegramChatId !== undefined) updateData.telegramChatId = telegramChatId;
       if (status !== undefined) updateData.status = status;
     }
     
@@ -129,6 +138,7 @@ export async function PUT(
         email: true,
         name: true,
         role: true,
+        position: true,
         status: true,
         updatedAt: true,
         assignedIntegrations: {

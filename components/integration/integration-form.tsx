@@ -84,6 +84,14 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
             { key: "elasticsearch_password", value: "", isSecret: true },
             { key: "elasticsearch_index", value: "wazuh-*", isSecret: false },
           ])
+        } else if (source === "socfortress" || source === "copilot") {
+          setCredentials([
+            { key: "host", value: "", isSecret: false },
+            { key: "port", value: "3306", isSecret: false },
+            { key: "user", value: "", isSecret: false },
+            { key: "password", value: "", isSecret: true },
+            { key: "database", value: "copilot", isSecret: false },
+          ])
         } else {
           // generic API defaults (empty - let user add)
           setCredentials([])
@@ -222,6 +230,7 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
                 <SelectItem value="stellar-cyber">Stellar Cyber</SelectItem>
                 <SelectItem value="qradar">QRadar</SelectItem>
                 <SelectItem value="wazuh">Wazuh SIEM</SelectItem>
+                <SelectItem value="socfortress">SOCFortress (Copilot MySQL)</SelectItem>
                 <SelectItem value="firewall">Firewall</SelectItem>
                 <SelectItem value="edr">EDR</SelectItem>
                 <SelectItem value="antivirus">Antivirus</SelectItem>

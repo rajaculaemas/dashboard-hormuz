@@ -13,7 +13,10 @@ model User {
   name      String?
   password  String   // hashed password
   role      String   @default("read-only") // "administrator", "analyst", "read-only"
+  position  String?  // "Analyst L1", "Analyst L2", "Analyst L3", "Security Engineer", "Manager"
+  telegramChatId String? @map("telegram_chat_id") // User's Telegram chat ID for notifications
   status    String   @default("active") // "active", "inactive"
+  stellarCyberApiKey String? @map("stellar_cyber_api_key") // User's personal Stellar Cyber API key for updating alerts/cases
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -21,7 +24,13 @@ model User {
   assignedCases  WazuhCase[]
   caseTimelineEvents WazuhCaseTimeline[]
   alertTimelines AlertTimeline[]
+  alertAnalyses AlertAnalysis[]
   assignedIntegrations UserIntegration[] // Integrasi yang di-assign ke user
+  
+  // Alert escalation relations
+  escalationsInitiated AlertEscalation[] @relation("EscalatedBy")
+  escalationsReceived AlertEscalation[] @relation("EscalatedTo")
+  escalationResponses AlertEscalationResponse[] @relation("ResponseFrom")
 
   @@map("users")
 }
@@ -72,6 +81,7 @@ model Alert {
   analysisNotes String? @map("analysis_notes") // Custom notes from analyst
 
   timeline    AlertTimeline[]
+  escalations AlertEscalation[]
 
   integrationId String
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -104,6 +114,21 @@ model AlertTimeline {
 
   @@map("alert_timeline")
   @@index([alertId])
+}
+
+model AlertAnalysis {
+  id              String   @id @default(cuid())
+  alertId         String   @map("alert_id")
+  integrationId   String   @map("integration_id")
+  content         String   // Analysis/comment text
+  author          String?  // Author name/email
+  authorId        String?  @map("author_id")
+  authorUser      User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([alertId])
+  @@index([integrationId])
+  @@map("alert_analysis")
 }
 
 model Case {
@@ -292,5 +317,92 @@ model WazuhCaseAlert {
 
   @@unique([caseId, alertId])
   @@map("wazuh_case_alerts")
+}
+
+// Alert Escalation - for Socfortress alerts only
+model AlertEscalation {
+  id                String   @id @default(cuid())
+  alertId           String   @map("alert_id")
+  alert             Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  
+  // Escalation chain: who escalated to whom
+  escalationLevel   Int      @default(1) // 1=L1→L2, 2=L2→L3
+  escalatedBy       User     @relation("EscalatedBy", fields: [escalatedByUserId], references: [id])
+  escalatedByUserId String   @map("escalated_by_user_id")
+  
+  escalatedTo       User     @relation("EscalatedTo", fields: [escalatedToUserId], references: [id])
+  escalatedToUserId String   @map("escalated_to_user_id")
+  
+  // Analysis and responses
+  l1Analysis        String?  @map("l1_analysis") // Initial analysis from L1
+  l2Analysis        String?  @map("l2_analysis") // Analysis from L2
+  l3Analysis        String?  @map("l3_analysis") // Analysis from L3
+  
+  // Status
+  status            String   @default("pending") // "pending" | "replied" | "escalated" | "resolved" | "timeout"
+  
+  // Telegram tracking
+  telegramMessageId String?  @map("telegram_message_id") // ID of message sent to L2/L3
+  telegramChatId    String?  @map("telegram_chat_id") // Chat ID of escalated person
+  
+  // Timestamps
+  escalatedAt       DateTime @default(now()) @map("escalated_at")
+  repliedAt         DateTime? @map("replied_at")
+  timeoutAt         DateTime? @map("timeout_at") // When 30-min timeout expires
+  resolvedAt        DateTime? @map("resolved_at")
+  
+  // Responses
+  responses         AlertEscalationResponse[]
+  
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  @@index([alertId])
+  @@index([escalatedToUserId])
+  @@index([status])
+  @@index([timeoutAt])
+  @@map("alert_escalations")
+}
+
+// Individual responses from L2/L3
+model AlertEscalationResponse {
+  id              String   @id @default(cuid())
+  escalationId    String   @map("escalation_id")
+  escalation      AlertEscalation @relation(fields: [escalationId], references: [id], onDelete: Cascade)
+  
+  responder       User     @relation("ResponseFrom", fields: [responderId], references: [id])
+  responderId     String   @map("responder_id")
+  
+  analysis        String   // Analysis/investigation result
+  conclusion      String   // Recommendation: PATCH_IMMEDIATELY | REQUIRES_INVESTIGATION | FALSE_POSITIVE | DISMISS | ESCALATE_FURTHER
+  action          String   // "reply" | "escalate"
+  
+  // If escalating to L3
+  escalatedToId   String?  @map("escalated_to_id") // L3 user ID if L2 escalates
+  
+  // Telegram reference
+  telegramMessageId String? @map("telegram_message_id")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@index([escalationId])
+  @@index([responderId])
+  @@map("alert_escalation_responses")
+}
+
+// Audit log for escalations
+model AlertEscalationAudit {
+  id              String   @id @default(cuid())
+  escalationId    String?  @map("escalation_id")
+  alertId         String   @map("alert_id")
+  
+  event           String   // "escalated" | "replied" | "re_escalated" | "timeout" | "admin_notified"
+  details         Json?    // Context data
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+  
+  @@index([alertId])
+  @@index([escalationId])
+  @@map("alert_escalation_audits")
 }
 

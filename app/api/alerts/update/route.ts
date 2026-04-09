@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { updateAlertStatus as updateStellarCyberAlertStatus } from "@/lib/api/stellar-cyber"
 import { updateAlertStatus as updateWazuhAlertStatus } from "@/lib/api/wazuh"
+import { updateSocfortressAlertStatus } from "@/lib/api/socfortress"
 import type { AlertStatus } from "@/lib/config/stellar-cyber"
 import { getCurrentUser } from "@/lib/auth/session"
 import { hasPermission } from "@/lib/auth/password"
@@ -82,6 +83,8 @@ export async function POST(request: NextRequest) {
     })
 
     // Record timeline events
+    // Use consistent timestamp for all events in this alert update
+    const eventTimestamp = new Date()
     const timelineEvents: any[] = []
 
     if (previousStatus !== normalizedStatus) {
@@ -93,7 +96,7 @@ export async function POST(request: NextRequest) {
         newValue: normalizedStatus,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: eventTimestamp,
       })
     }
 
@@ -106,7 +109,7 @@ export async function POST(request: NextRequest) {
         newValue: severity,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: eventTimestamp,
       })
     }
 
@@ -117,7 +120,7 @@ export async function POST(request: NextRequest) {
         description: comments,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: eventTimestamp,
       })
     }
 
@@ -128,7 +131,7 @@ export async function POST(request: NextRequest) {
           description: analysisNotes,
           changedBy: user.name || user.email || "System",
           changedByUserId: user.id,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -145,6 +148,7 @@ export async function POST(request: NextRequest) {
           status: normalizedStatus as AlertStatus,
           comments,
           integrationId: alert.integrationId,
+          userId: user.id,  // Pass user ID to use user's API key
         })
       } catch (error) {
         console.error("Error updating alert status in Stellar Cyber:", error)
@@ -155,6 +159,16 @@ export async function POST(request: NextRequest) {
         await updateWazuhAlertStatus(alert.externalId, normalizedStatus as any, assignee, severity)
       } catch (error) {
         console.error("Error updating alert status in Wazuh:", error)
+        // Continue even if update fails in source
+      }
+    } else if ((alert.integration.source === "socfortress" || alert.integration.source === "copilot") && alert.externalId) {
+      try {
+        await updateSocfortressAlertStatus(alert.integrationId, alert.externalId, normalizedStatus, {
+          comments,
+          assignedTo: assignee,
+        })
+      } catch (error) {
+        console.error("Error updating alert status in SOCFortress:", error)
         // Continue even if update fails in source
       }
     }

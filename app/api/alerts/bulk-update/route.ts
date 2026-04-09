@@ -61,6 +61,9 @@ export async function POST(request: NextRequest) {
         },
       })
 
+      // Use consistent timestamp for all events in this alert update
+      const eventTimestamp = new Date()
+
       if (previousStatus !== normalizedStatus) {
         timelineEvents.push({
           alertId,
@@ -70,7 +73,7 @@ export async function POST(request: NextRequest) {
           newValue: normalizedStatus,
           changedBy: user.name || user.email || 'System',
           changedByUserId: user.id,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -83,7 +86,7 @@ export async function POST(request: NextRequest) {
           newValue: severity,
           changedBy: user.name || user.email || 'System',
           changedByUserId: user.id,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -94,7 +97,7 @@ export async function POST(request: NextRequest) {
           description: comments,
           changedBy: user.name || user.email || 'System',
           changedByUserId: user.id,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -105,7 +108,7 @@ export async function POST(request: NextRequest) {
           description: analysisNotes,
           changedBy: user.name || user.email || 'System',
           changedByUserId: user.id,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 

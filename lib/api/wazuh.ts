@@ -118,12 +118,13 @@ export async function getAlerts(
       since = new Date(Date.now() - options.hoursBack * 60 * 60 * 1000).toISOString()
       console.log(`[Wazuh] Custom backfill - fetching last ${options.hoursBack} hours`)
     } else if (lastSync && !effectiveResetCursor) {
-      // Overlap window: default 2 hours, but widen to 24 hours for Fortinet indices
+      // Overlap window: default 2 hours, but widen for specific indices
       const isFortinetIndex = /fortinet/i.test(credentials.elasticsearch_index || '')
-      const overlapMinutes = isFortinetIndex ? 8 * 60 : 120
+      const isPaloAltoIndex = /palo.?alto/i.test(credentials.elasticsearch_index || '')
+      const overlapMinutes = (isFortinetIndex || isPaloAltoIndex) ? 8 * 60 : 120
       const syncTime = new Date(lastSync.getTime() - overlapMinutes * 60 * 1000)
       since = syncTime.toISOString()
-      console.log(`[Wazuh] Incremental sync - fetching from lastSync -${overlapMinutes}min: ${since} (lastSync: ${lastSync.toISOString()}, fortinet=${isFortinetIndex})`)
+      console.log(`[Wazuh] Incremental sync - fetching from lastSync -${overlapMinutes}min: ${since} (lastSync: ${lastSync.toISOString()}, fortinet=${isFortinetIndex}, paloalto=${isPaloAltoIndex})`)
     } else {
       since = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
       console.log(`[Wazuh] Default sync - fetching last 3 hours (optimal balance for 10000 doc limit)`)

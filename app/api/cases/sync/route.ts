@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { getCases, getCaseAlerts } from "@/lib/api/stellar-cyber-case"
+import { getSocfortressCases } from "@/lib/api/socfortress"
 import { getAssigneeName } from "@/lib/utils"
 
 export async function POST(request: NextRequest) {
@@ -48,6 +49,11 @@ export async function POST(request: NextRequest) {
         limit: 1000,
       })
       stellarCases = casesResponse.data?.cases || casesResponse || []
+    } else if (integration.source === "socfortress" || integration.source === "copilot") {
+      // Fetch cases from SOCFortress MySQL
+      console.log("Fetching cases from SOCFortress...")
+      const casesResponse = await getSocfortressCases(integrationId, { limit: 100 })
+      stellarCases = casesResponse.cases || []
     } else if (integration.source === "qradar") {
       // For QRadar, pull local QRadar tickets stored in DB (created via Follow Up)
       console.log("Fetching cases from QRadar tickets stored in DB...")
@@ -87,9 +93,9 @@ export async function POST(request: NextRequest) {
       stellarCases = []
     }
 
-    console.log(`Retrieved ${stellarCases.length} cases from Stellar Cyber`)
+    console.log(`Retrieved ${stellarCases.length} cases`)
 
-    // Filter out "Empty Case" cases
+    // Filter out "Empty Case" cases (Stellar Cyber specific)
     const filteredCases = stellarCases.filter((c) => {
       const isEmptyCase = c.name && c.name.includes("Empty Case (All Alerts Ignored or Closed)")
       if (isEmptyCase) {
@@ -102,7 +108,7 @@ export async function POST(request: NextRequest) {
 
     // Log some sample cases to see their status
     if (filteredCases.length > 0) {
-      console.log("Sample cases from Stellar Cyber:")
+      console.log("Sample cases:")
       filteredCases.slice(0, 3).forEach((c, i) => {
         console.log(`  ${i + 1}. ${c._id} - ${c.name} - Status: ${c.status} - Modified: ${c.modified_at}`)
       })

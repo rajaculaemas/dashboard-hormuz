@@ -7,7 +7,16 @@ const JWT_SECRET = new TextEncoder().encode(
 )
 
 // Public paths yang tidak perlu authentication
-const publicPaths = ["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/me", "/api/threat-intel/check-hash"]
+const publicPaths = [
+  "/login",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/me",
+  "/api/threat-intel/check-hash",
+  "/api/telegram/polling-init", // Allow polling init without auth
+  "/api/telegram/polling-stop", // Allow polling stop without auth
+  "/api/health/telegram-polling", // Allow polling health check without auth
+]
 
 // Middleware untuk menangani CORS dan authentication routing
 export async function middleware(request: NextRequest) {

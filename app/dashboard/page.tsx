@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ASSIGNEES, QRADAR_ASSIGNEES } from "@/components/case/case-action-dialog"
+import { SOCFORTRESS_USERS, ALERT_TAGS, ALERT_SEVERITIES } from "@/lib/constants/socfortress"
 import { SafeDate } from "@/components/ui/safe-date"
 import { Switch } from "@/components/ui/switch"
 import { SyncStatus } from "@/components/alert/sync-status"
@@ -40,10 +41,40 @@ import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
 import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-dialog"
 import { WazuhAddToCaseDialog } from "@/components/alert/wazuh-add-to-case-dialog"
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
+import { SocfortressAlertDetailDialog } from "@/components/alert/socfortress-alert-detail-dialog"
+import { SocfortressAlertUpdateDialog } from "@/components/alert/socfortress-alert-update-dialog"
+import { QRadarAlertUpdateDialog } from "@/components/alert/qradar-alert-update-dialog"
+import { WazuhAlertUpdateDialog } from "@/components/alert/wazuh-alert-update-dialog"
+import { StellarCyberAlertUpdateDialog } from "@/components/alert/stellar-cyber-alert-update-dialog"
+import { CreateCaseDialog } from "@/components/case/create-case-dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
 import { AlertTable, type AlertFilter } from "@/components/alert/alert-table"
 import { AlertColumnSelector, DEFAULT_COLUMNS, type AlertColumn } from "@/components/alert/alert-column-selector"
+
+// Helper functions to detect alert source types
+function isSocfortressAlert(alert: any): boolean {
+  if (!alert) return false
+  // Check for Copilot/SOCFortress specific metadata
+  return (
+    alert.metadata?.socfortress ||
+    alert.metadata?.copilot ||
+    alert.source === "socfortress" ||
+    alert.source === "copilot" ||
+    (typeof alert.source === "string" && alert.source.toLowerCase().includes("socfortress")) ||
+    (typeof alert.source === "string" && alert.source.toLowerCase().includes("copilot"))
+  )
+}
+
+function isWazuhAlert(alert: any): boolean {
+  if (!alert) return false
+  return alert.metadata?.agentId || alert.metadata?.agent?.id || (alert.source === "wazuh")
+}
+
+function isQRadarAlert(alert: any): boolean {
+  if (!alert) return false
+  return alert.metadata?.qradar || alert.source === "qradar"
+}
 
 export default function AlertPanel() {
   const {
@@ -105,12 +136,15 @@ export default function AlertPanel() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [showEventDetailModal, setShowEventDetailModal] = useState(false)
   const [showAlertDetailModal, setShowAlertDetailModal] = useState(false)
+  const [analysisRefreshTrigger, setAnalysisRefreshTrigger] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
   const [paginationData, setPaginationData] = useState<any>(null)
   const [wazuhAddToCaseOpen, setWazuhAddToCaseOpen] = useState(false)
   const [wazuhCaseAlertIds, setWazuhCaseAlertIds] = useState<string[]>([])
+  const [createCaseDialogOpen, setCreateCaseDialogOpen] = useState(false)
+  const [createCaseAlertIds, setCreateCaseAlertIds] = useState<string[]>([])
   const [selectedSeverity, setSelectedSeverity] = useState<string | null>(null)
   const [severityBasedOnAnalysis, setSeverityBasedOnAnalysis] = useState<string | null>(null)
   const [analysisNotes, setAnalysisNotes] = useState("")
@@ -502,20 +536,37 @@ export default function AlertPanel() {
       return null
     }
     // Helper to extract response code from parsed message payload (Wazuh)
+    // NOTE: avoid using generic `id` fields as they often represent event IDs.
+    // Prefer explicit HTTP status fields or `data_id`. If present, also attempt
+    // to find a 3-digit status code inside any available full-log text.
     const extractResponseFromMessage = (): any => {
       try {
         if (!meta.message || typeof meta.message !== 'string') return null
         let parsed: any = {}
         try { parsed = JSON.parse(meta.message) } catch { return null }
         const get = (fn: () => any) => { try { const v = fn(); return v === undefined ? undefined : v } catch { return undefined } }
-        return (
-          get(() => parsed.data.win.eventdata.id) ||
-          get(() => parsed.data.id) ||
-          get(() => parsed.data.columns?.id) ||
+
+        // prefer explicit http response fields and explicit data_id
+        const candidate = (
           get(() => parsed.data?.http?.response?.status_code) ||
           get(() => parsed.data?.http?.response?.status) ||
+          get(() => parsed.data?.status_code) ||
+          get(() => parsed.data?.http_status_code) ||
+          get(() => parsed.data?.data_id) ||
+          get(() => parsed.data_id) ||
           null
         )
+        if (candidate !== null && candidate !== undefined) return candidate
+
+        // fallback: try to extract a 3-digit HTTP status from a full-text log
+        const fullLogText = meta.fullLog || meta.full_log || meta.raw_es?.full_log || alert.full_log || alert.message || ''
+        try {
+          const txt = String(fullLogText)
+          const m = txt.match(/\b([1-5][0-9]{2})\b/)
+          if (m && m[1]) return m[1]
+        } catch {}
+
+        return null
       } catch {
         return null
       }
@@ -878,6 +929,23 @@ export default function AlertPanel() {
       if (response.ok) {
         const result = await response.json()
         console.log("[Dashboard] Alert status updated successfully:", result)
+        
+        // Save analysis if provided (for all alert types)
+        if (analysisNotes?.trim()) {
+          try {
+            await fetch(`/api/alerts/${selectedAlert.id}/analyses`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                content: analysisNotes,
+                integrationId: selectedAlert.integrationId || selectedAlert.metadata?.integrationId,
+              }),
+            })
+          } catch (error) {
+            console.error("Failed to save analysis:", error)
+            // Don't show error to user, analysis save is not critical
+          }
+        }
         
         // Refresh alerts after update
         await loadAlerts()
@@ -1425,6 +1493,24 @@ export default function AlertPanel() {
                 }
                 return null
               })()}
+              {selectedAlerts.length > 0 && canUpdateAlert && (() => {
+                // Show create case button for SOCFortress alerts
+                const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
+                const allSocfortress = selectedAlertObjs.every(a => 
+                  a && (a.source === 'socfortress' || a.source === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot)
+                )
+                if (allSocfortress) {
+                  return (
+                    <Button variant="outline" size="sm" onClick={() => {
+                      setCreateCaseAlertIds(selectedAlerts)
+                      setCreateCaseDialogOpen(true)
+                    }}>
+                      Create Case
+                    </Button>
+                  )
+                }
+                return null
+              })()}
               
             </div>
           </div>
@@ -1572,139 +1658,80 @@ export default function AlertPanel() {
         </CardContent>
       </Card>
 
-      {/* Update Status Dialog - Outside of loop for proper control */}
-      <Dialog open={showUpdateStatusDialog} onOpenChange={setShowUpdateStatusDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Update Alert Status</DialogTitle>
-            <DialogDescription>
-              Change the status of this alert and add optional comments.
-            </DialogDescription>
-          </DialogHeader>
-          {selectedAlert && (
-            <div className="space-y-4 py-4">
-              {(selectedAlert.metadata?.wazuh || selectedAlert.source === "wazuh") && (
-                <div className="space-y-2">
-                  <Label htmlFor="severity">Severity</Label>
-                  <Select value={selectedSeverity || ""} onValueChange={(v) => setSelectedSeverity(v)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select severity" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="critical">Critical</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <Select
-                  value={updateStatus}
-                  onValueChange={(value) => setUpdateStatus(value as AlertStatus)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedAlert.metadata?.qradar ? (
-                      <>
-                        <SelectItem value="New">Open</SelectItem>
-                        <SelectItem value="In Progress">Follow Up (Create Ticket)</SelectItem>
-                        <SelectItem value="Closed">Closed</SelectItem>
-                      </>
-                    ) : (
-                      <>
-                        <SelectItem value="New">New</SelectItem>
-                        <SelectItem value="In Progress">In Progress</SelectItem>
-                        <SelectItem value="Ignored">Ignored</SelectItem>
-                        <SelectItem value="Closed">Closed</SelectItem>
-                      </>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="assign">
-                  Assign To {selectedAlert.metadata?.qradar && <span className="text-red-500">*</span>}
-                </Label>
-                <Select value={selectedAssignee || ""} onValueChange={(v) => setSelectedAssignee(v)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select user" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedAlert.metadata?.qradar 
-                      ? QRADAR_ASSIGNEES.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}
-                          </SelectItem>
-                        ))
-                      : (selectedAlert.metadata?.wazuh || selectedAlert.source === "wazuh" ? appUsers : ASSIGNEES).map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}
-                          </SelectItem>
-                        ))
-                    }
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="comments">Comments</Label>
-                <Textarea
-                  id="comments"
-                  placeholder="Add comments about this status change..."
-                  value={comments}
-                  onChange={(e) => setComments(e.target.value)}
-                />
-              </div>
-
-              {/* Custom Analysis Fields - Available for all alert types, stored locally only */}
-              <div className="border-t pt-4 mt-4">
-                <h3 className="text-sm font-semibold mb-3">Analysis (Local Only)</h3>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="severity-analysis">Severity Based on Analysis</Label>
-                  <Select value={severityBasedOnAnalysis || ""} onValueChange={(v) => setSeverityBasedOnAnalysis(v)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select severity (optional)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Low">Low</SelectItem>
-                      <SelectItem value="Medium">Medium</SelectItem>
-                      <SelectItem value="High">High</SelectItem>
-                      <SelectItem value="Critical">Critical</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="analysis-notes">Analysis Notes</Label>
-                  <Textarea
-                    id="analysis-notes"
-                    placeholder="Add analysis notes (stored locally, not sent to external systems)..."
-                    value={analysisNotes}
-                    onChange={(e) => setAnalysisNotes(e.target.value)}
-                    className="h-20"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={handleUpdateStatus} disabled={isUpdatingStatus}>
-              {isUpdatingStatus && (
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-              )}
-              {isUpdatingStatus ? "Updating..." : "Update Status"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Update Status Dialog - Conditional rendering based on alert type */}
+      {selectedAlert?.metadata?.socfortress ? (
+        // Use SOCFortress-specific update dialog with tags & full functionality
+        <SocfortressAlertUpdateDialog
+          open={showUpdateStatusDialog}
+          onOpenChange={setShowUpdateStatusDialog}
+          alert={selectedAlert}
+          onUpdateSuccess={async () => {
+            setShowUpdateStatusDialog(false)
+            // Refresh alerts
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+          onAnalysisSaved={() => {
+            // Trigger analysis refresh in detail panel
+            setAnalysisRefreshTrigger((prev) => prev + 1)
+          }}
+        />
+      ) : selectedAlert?.metadata?.qradar ? (
+        // QRadar-specific update dialog
+        <QRadarAlertUpdateDialog
+          open={showUpdateStatusDialog}
+          onOpenChange={setShowUpdateStatusDialog}
+          alert={selectedAlert}
+          onUpdateSuccess={async () => {
+            setShowUpdateStatusDialog(false)
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+          onLoadAlerts={async () => {
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+          onShowClosingReasonDialog={() => {
+            setShowClosingReasonDialog(true)
+          }}
+          selectedClosingReason={selectedClosingReason}
+          showClosingReasonDialog={showClosingReasonDialog}
+        />
+      ) : selectedAlert?.metadata?.wazuh || selectedAlert?.source === "wazuh" ? (
+        // Wazuh-specific update dialog
+        <WazuhAlertUpdateDialog
+          open={showUpdateStatusDialog}
+          onOpenChange={setShowUpdateStatusDialog}
+          alert={selectedAlert}
+          appUsers={appUsers}
+          onUpdateSuccess={async () => {
+            setShowUpdateStatusDialog(false)
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+          onLoadAlerts={async () => {
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+        />
+      ) : (
+        // Stellar Cyber or default alert type update dialog
+        <StellarCyberAlertUpdateDialog
+          open={showUpdateStatusDialog}
+          onOpenChange={setShowUpdateStatusDialog}
+          alert={selectedAlert}
+          userId={user?.id}
+          onUpdateSuccess={async () => {
+            setShowUpdateStatusDialog(false)
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+          onLoadAlerts={async () => {
+            await loadAlerts(currentPage, pageSize)
+            await loadAllFilteredAlerts()
+          }}
+        />
+      )}
 
       {/* Bulk Update Dialog for Wazuh alerts */}
       <Dialog open={showBulkUpdateDialog} onOpenChange={setShowBulkUpdateDialog}>
@@ -2014,19 +2041,22 @@ export default function AlertPanel() {
       />
 
       {/* Alert Detail Dialog - Conditional based on integration type */}
-      {/* Helper function to determine if alert is from Wazuh, QRadar, or generic */}
+      {/* Shows appropriate dialog: Socfortress, Wazuh, QRadar, or generic */}
       {selectedAlert && (() => {
-        const isWazuh = selectedAlert.metadata?.agentId ||
-          selectedAlert.integration?.source?.toLowerCase() === "wazuh" || 
-          selectedAlert.integration?.name?.toLowerCase().includes("wazuh") ||
-          selectedAlert.metadata?.ruleId ||
-          selectedAlert.metadata?.ruleLevel !== undefined
-        
-        const isQRadar = selectedAlert.metadata?.qradar ||
-          selectedAlert.integration?.source?.toLowerCase() === "qradar" ||
-          selectedAlert.integration?.name?.toLowerCase().includes("qradar")
+        const isSocfortress = isSocfortressAlert(selectedAlert)
+        const isWazuh = isWazuhAlert(selectedAlert)
+        const isQRadar = isQRadarAlert(selectedAlert)
 
-        if (isWazuh) {
+        if (isSocfortress) {
+          return (
+            <SocfortressAlertDetailDialog
+              open={showAlertDetailModal}
+              onOpenChange={setShowAlertDetailModal}
+              alert={selectedAlert}
+              refreshTrigger={analysisRefreshTrigger}
+            />
+          )
+        } else if (isWazuh) {
           const enriched = selectedAlert
             ? ({
                 ...selectedAlert,
@@ -2163,6 +2193,20 @@ export default function AlertPanel() {
           loadAlerts()
         }}
       />
+
+      {/* Create Case Dialog for SOCFortress */}
+      {createCaseAlertIds.length > 0 && (
+        <CreateCaseDialog
+          open={createCaseDialogOpen}
+          onOpenChange={setCreateCaseDialogOpen}
+          selectedAlerts={createCaseAlertIds.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]}
+          onSuccess={() => {
+            setSelectedAlerts([])
+            setCreateCaseAlertIds([])
+            loadAlerts()
+          }}
+        />
+      )}
     </div>
   )
 }

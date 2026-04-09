@@ -1,0 +1,256 @@
+{
+  "db": "copilot",
+  "generated_at": "2026-02-05T04:49:40Z",
+  "mode": "case_by_id",
+  "limits": {
+    "case_limit": 1,
+    "child_limit": 200,
+    "asset_limit": 200,
+    "asset_context_limit": 200
+  },
+  "count": 1,
+  "cases": [
+    {
+      "case_id": 69,
+      "case": {
+        "id": 69,
+        "case_name": "Existing Linux user account modified\n      (possible privilege escalation or persistence) - SOC-WAF-ALIBABA",
+        "case_description": "Existing Linux user account modified\n      (possible privilege escalation or persistence)",
+        "case_creation_time": "2026-01-12 18:11:56",
+        "case_status": "CLOSED",
+        "assigned_to": "soc247",
+        "customer_code": "posindonesia",
+        "notification_invoked_number": 0,
+        "severity": "Low"
+      },
+      "case_alert_links": [
+        {
+          "case_id": 69,
+          "alert_id": 192,
+          "selected_asset_ids": "[263]"
+        }
+      ],
+      "alerts": [
+        {
+          "alert_id": 192,
+          "root": {
+            "id": 192,
+            "alert_name": "Existing Linux user account modified\n      (possible privilege escalation or persistence)",
+            "alert_description": "Existing Linux user account modified\n      (possible privilege escalation or persistence)",
+            "status": "CLOSED",
+            "alert_creation_time": "2026-01-12 06:30:08",
+            "customer_code": "posindonesia",
+            "time_closed": "2026-01-12 13:53:05",
+            "source": "wazuh",
+            "assigned_to": "soc247",
+            "severity": "Low"
+          },
+          "children": {
+            "incident_management_alert_history": [
+              {
+                "id": 631,
+                "alert_id": 192,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "IN_PROGRESS",
+                "new_value": "CLOSED",
+                "changed_by": null,
+                "changed_at": "2026-01-12 13:53:05",
+                "description": "Status changed from IN_PROGRESS to AlertStatus.CLOSED"
+              },
+              {
+                "id": 560,
+                "alert_id": 192,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "OPEN",
+                "new_value": "IN_PROGRESS",
+                "changed_by": null,
+                "changed_at": "2026-01-12 11:12:58",
+                "description": "Status changed from OPEN to AlertStatus.IN_PROGRESS"
+              },
+              {
+                "id": 559,
+                "alert_id": 192,
+                "change_type": "ASSIGNMENT_CHANGE",
+                "field_name": "assigned_to",
+                "old_value": "(unassigned)",
+                "new_value": "soc247",
+                "changed_by": null,
+                "changed_at": "2026-01-12 11:12:53",
+                "description": "Assignment changed from (unassigned) to soc247"
+              },
+              {
+                "id": 558,
+                "alert_id": 192,
+                "change_type": "SEVERITY_CHANGE",
+                "field_name": "severity",
+                "old_value": null,
+                "new_value": "Low",
+                "changed_by": null,
+                "changed_at": "2026-01-12 11:12:50",
+                "description": "Severity changed from None to AlertSeverity.LOW"
+              },
+              {
+                "id": 557,
+                "alert_id": 192,
+                "change_type": "COMMENT_EDITED",
+                "field_name": "comments",
+                "old_value": "Telah terdeteksi alert Existing Linux user account modified (possible privilege escalation or persistence). Berdasarkan analisis team SOC, telah ditemukan aktivitas modifikasi informasi akun Linux den",
+                "new_value": "Telah terdeteksi alert Existing Linux user account modified (possible privilege escalation or persistence). Berdasarkan analisis team SOC, telah ditemukan aktivitas modifikasi informasi akun Linux den",
+                "changed_by": "admin",
+                "changed_at": "2026-01-12 11:12:39",
+                "description": "Comment edited by admin"
+              },
+              {
+                "id": 556,
+                "alert_id": 192,
+                "change_type": "COMMENT_ADDED",
+                "field_name": "comments",
+                "old_value": null,
+                "new_value": "Telah terdeteksi alert Existing Linux user account modified (possible privilege escalation or persistence). Berdasarkan analisis team SOC, telah ditemukan aktivitas modifikasi informasi akun Linux den",
+                "changed_by": "admin",
+                "changed_at": "2026-01-12 11:12:16",
+                "description": "Comment added by admin"
+              }
+            ],
+            "incident_management_alertevent": [
+              {
+                "source_data": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:10:50.999Z\", \"rule_firedtimes\": 4, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+                "id": 16712,
+                "alert_id": 192,
+                "asset_name": "iZk1a4qvdwnhf9twlg64tuZ",
+                "created_at": "2026-01-12 06:30:08"
+              },
+              {
+                "source_data": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:09:30.805Z\", \"rule_firedtimes\": 3, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+                "id": 16713,
+                "alert_id": 192,
+                "asset_name": "SOC-WAF-ALIBABA",
+                "created_at": "2026-01-12 06:30:08"
+              },
+              {
+                "source_data": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:08:21.146Z\", \"rule_firedtimes\": 2, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+                "id": 16714,
+                "alert_id": 192,
+                "asset_name": "SOC-WAF-AWS",
+                "created_at": "2026-01-12 06:30:08"
+              },
+              {
+                "source_data": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:07:18.600Z\", \"rule_firedtimes\": 1, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+                "id": 16715,
+                "alert_id": 192,
+                "asset_name": "SOC-WAF-AZURE",
+                "created_at": "2026-01-12 06:30:08"
+              }
+            ],
+            "incident_management_comment": [
+              {
+                "id": 28,
+                "alert_id": 192,
+                "comment": "Telah terdeteksi alert Existing Linux user account modified (possible privilege escalation or persistence). Berdasarkan analisis team SOC, telah ditemukan aktivitas modifikasi informasi akun Linux dengan username “teguh” menggunakan perintah chfn. dan sudah dibuatkan tiket ke tim POS",
+                "user_name": "admin",
+                "created_at": "2026-01-12 11:12:16"
+              }
+            ],
+            "tags": {
+              "mapping": [
+                {
+                  "alert_id": 192,
+                  "tag_id": 546
+                },
+                {
+                  "alert_id": 192,
+                  "tag_id": 547
+                }
+              ],
+              "tags": [
+                {
+                  "id": 546,
+                  "tag": "Benign True Positive"
+                },
+                {
+                  "id": 547,
+                  "tag": "Benign True Positive"
+                }
+              ]
+            },
+            "iocs": {
+              "mapping": [],
+              "iocs": []
+            }
+          },
+          "assets": [
+            {
+              "id": 265,
+              "alert_linked": 192,
+              "asset_name": "SOC-WAF-AZURE",
+              "alert_context_id": 265,
+              "agent_id": "154",
+              "velociraptor_id": "C.0481e73cdff699e8-OBF6G",
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_45",
+              "index_id": "3405abb2-ef7e-11f0-93cb-005056120016"
+            },
+            {
+              "id": 264,
+              "alert_linked": 192,
+              "asset_name": "SOC-WAF-AWS",
+              "alert_context_id": 264,
+              "agent_id": "153",
+              "velociraptor_id": "C.82d02941eeeb50bd-OBF6G",
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_45",
+              "index_id": "5381ab18-ef7e-11f0-93cb-005056120016"
+            },
+            {
+              "id": 263,
+              "alert_linked": 192,
+              "asset_name": "SOC-WAF-ALIBABA",
+              "alert_context_id": 263,
+              "agent_id": "152",
+              "velociraptor_id": "C.7d7aefadf671477c-OBF6G",
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_45",
+              "index_id": "7b5d3872-ef7e-11f0-93cb-005056120016"
+            },
+            {
+              "id": 262,
+              "alert_linked": 192,
+              "asset_name": "iZk1a4qvdwnhf9twlg64tuZ",
+              "alert_context_id": 262,
+              "agent_id": "151",
+              "velociraptor_id": "C.4347b3ce045bc591-OBF6G",
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_45",
+              "index_id": "a7e33b12-ef7e-11f0-93cb-005056120016"
+            }
+          ],
+          "asset_contexts": [
+            {
+              "context": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:10:50.999Z\", \"rule_firedtimes\": 4, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+              "id": 262,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:09:30.805Z\", \"rule_firedtimes\": 3, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+              "id": 263,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:08:21.146Z\", \"rule_firedtimes\": 2, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+              "id": 264,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960203\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"linux\", \"rule_group2\": \"account_management\", \"rule_group3\": \"threatlinux\", \"rule_groups\": \"linux, account_management, threatlinux, account_modification, privilege_escalation, threat\", \"process_name\": [], \"rule_mitre_id\": \"T1098\", \"timestamp_utc\": \"2026-01-12T06:07:18.600Z\", \"rule_firedtimes\": 1, \"rule_description\": \"Existing Linux user account modified\\n      (possible privilege escalation or persistence)\", \"rule_mitre_tactic\": \"Persistence\", \"rule_mitre_technique\": \"Account Manipulation\"}",
+              "id": 265,
+              "source": "wazuh"
+            }
+          ],
+          "notes": []
+        }
+      ]
+    }
+  ]
+}

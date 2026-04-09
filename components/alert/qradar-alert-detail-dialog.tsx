@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator"
 import { Loader2, ShieldCheck, Clock } from "lucide-react"
 import { IpReputationDialog } from "@/components/alert/ip-reputation-dialog"
 import { AiAnalysis } from "@/components/alert/ai-analysis"
+import { AlertAnalysisSection } from "@/components/alert/alert-analysis-section"
 
 // Function to remove null/undefined values from object
 function removeNullValues(obj: any): any {
@@ -538,6 +539,9 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                 </div>
               </CardContent>
             </Card>
+
+            {/* Analysis & Findings */}
+            <AlertAnalysisSection alertId={alert.id} integrationId={alert.integrationId} />
           </div>
         </div>
 

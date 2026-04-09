@@ -11,6 +11,7 @@ import { AlertTriangleIcon, ShieldIcon, NetworkIcon, ShieldCheck, Clock } from "
 import { IpReputationDialog } from "@/components/alert/ip-reputation-dialog"
 import { HashReputationDialog } from "@/components/alert/hash-reputation-dialog"
 import { AiAnalysis } from "@/components/alert/ai-analysis"
+import { AlertAnalysisSection } from "@/components/alert/alert-analysis-section"
 
 interface WazuhAlertDetailDialogProps {
   open: boolean
@@ -70,18 +71,91 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
   const clusterName = metadata.clusterName || ""
   const clusterNode = metadata.clusterNode || ""
   
+  // Helper: extract first public IP from a free-form log string, excluding agent IP and private ranges
+  const extractIpFromLog = (log: string, excludeIp?: string) => {
+    if (!log || typeof log !== 'string') return ""
+    // Always scan the first 2000 chars for public IPs, regardless of log length
+    const prefix = log.slice(0, 2000)
+    // First try targeted nginx/accesslog pattern in the prefix
+    const accessMatch = prefix.match(/[:\s]([0-9]{1,3}(?:\.[0-9]{1,3}){3})\s+-\s+-/)
+    if (accessMatch && accessMatch[1]) {
+      const ip = accessMatch[1]
+      if (!(excludeIp && ip === excludeIp)) {
+        // Check if public
+        if (!/^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[0-1])\./.test(ip) && ip !== '127.0.0.1') {
+          return ip
+        }
+      }
+    }
+    // General IP regex in prefix
+    const ipRegex = /\b(25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/g
+    let matches = Array.from(new Set((prefix.match(ipRegex) || [])))
+    // filter out excludeIp and private ranges
+    const isPrivate = (ip: string) => {
+      return /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[0-1])\./.test(ip) || ip === '127.0.0.1'
+    }
+    let publicMatches = matches.filter(ip => (!excludeIp || ip !== excludeIp) && !isPrivate(ip))
+    if (publicMatches.length > 0) return publicMatches[0]
+    // If nothing found in prefix, scan the entire log for public IPs
+    if (prefix.length < log.length) {
+      matches = Array.from(new Set((log.match(ipRegex) || [])))
+      publicMatches = matches.filter(ip => (!excludeIp || ip !== excludeIp) && !isPrivate(ip))
+      if (publicMatches.length > 0) return publicMatches[0]
+    }
+    // fallback: return first match (even if private)
+    if (matches.length > 0) return matches[0]
+    return ""
+  }
+
+  // Helper: extract URL path from common access-log patterns inside a log string
+  const extractUrlFromLog = (log: string) => {
+    if (!log || typeof log !== 'string') return ""
+    // Look for patterns like: "GET /path HTTP/1.1" or '"POST /path HTTP/1.0"'
+    const m = log.match(/\"(?:GET|POST|PUT|DELETE|HEAD|OPTIONS)\s+([^\s\"]+)\s+HTTP\/[0-9.]+\"/i)
+    if (m && m[1]) return m[1]
+    // sometimes logs include method and URL without HTTP version
+    const m2 = log.match(/\"(?:GET|POST|PUT|DELETE|HEAD|OPTIONS)\s+([^\s\"]+)\"/i)
+    if (m2 && m2[1]) return m2[1]
+    // fallback: try to capture first /path-looking token
+    const m3 = log.match(/\s(\/[^\s\"]+)/)
+    if (m3 && m3[1]) return m3[1]
+    return ""
+  }
+  
+  
   // Extract network info from multiple possible locations in raw data
   // Windows events: data.win.eventdata.{sourceIp, destinationIp, sourcePort, destinationPort, protocol}
   // Linux/generic events: data.{srcip, dstip, srcport, dstport, protocol}
   // Support multiple Wazuh shapes: older/newer messages may store network fields in
   // `data.columns.remote_address` / `data.columns.remote_port` or as top-level `data.srcip`.
+  // Prefer flattened `data_srcip` when available, then other parsed locations.
+  // If missing, try to parse the IP from the raw full_log and prefer public IPs.
+  const fullLogSourceForInitial = parsedData.full_log || metadata.fullLog || alert.full_log || ""
+  const parsedIpFromLogInitial = extractIpFromLog(fullLogSourceForInitial, agentIp)
+
   const srcIp =
+    // explicit flattened fields first
+    metadata.data_srcip ||
+    alert.data_srcip ||
+    // check raw_es (original ES _source) shapes
+    metadata.raw_es?.data_srcip ||
+    metadata.raw_es?.data?.srcip ||
+    metadata.raw_es?.srcip ||
+    // parsed message shapes
     parsedData.data?.win?.eventdata?.sourceIp ||
     parsedData.data?.srcip ||
+    parsedData.data?.columns?.srcip ||
+    // parsed IP from full_log (prefer public and not agent IP)
+    parsedIpFromLogInitial ||
+    // prefer gl2_remote_ip next (higher priority than alert.source)
+    metadata.gl2_remote_ip ||
+    alert.gl2_remote_ip ||
+    // Top-level source fields and other fallbacks
     parsedData.data?.columns?.remote_address ||
     metadata.data_columns_remote_address ||
     metadata.srcIp ||
     alert.srcIp ||
+    alert.source ||
     ""
   const dstIp =
     parsedData.data?.win?.eventdata?.destinationIp ||
@@ -113,26 +187,6 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
     alert.protocol ||
     ""
   // Prefer nested data.id (HTTP status/code) over top-level event id to show the correct Data ID field
-  const dataId =
-    parsedData.data?.win?.eventdata?.id ||
-    parsedData.data?.id ||
-    parsedData.data?.columns?.id ||
-    metadata.dataId ||
-    metadata.data_id ||
-    // Accept top-level alert fields when metadata was not populated
-    alert.dataId ||
-    alert.data_id ||
-    // Try raw ES _source if present (various shapes)
-    metadata.raw_es?.data_id ||
-    metadata.raw_es?.data?.id ||
-    metadata.raw_es?.id ||
-    // Some shapes include HTTP response under parsedData.data.http.response
-    parsedData.data?.http?.response?.status_code ||
-    parsedData.data?.http?.response?.status ||
-    // Also check raw_es http response shapes
-    metadata.raw_es?.http?.response?.status_code ||
-    metadata.raw_es?.http?.response?.status ||
-    ""
 
   // Additional network-related fields requested for display
   const remip =
@@ -207,9 +261,38 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
   console.log('[WazuhAlertDetailDialog] resolved processCmdLine:', processCmdLine)
   
   // Web request fields (from metadata added by wazuh-client.ts)
-  const urlRaw = metadata.url || parsedData.data?.url || ""
+  // Prefer explicit `data_url` / `data_srcip` flattened fields when present
+  const urlRaw =
+    metadata.url ||
+    metadata.data_url ||
+    alert.data_url ||
+    // raw_es may contain the original parsed structure
+    metadata.raw_es?.data?.url ||
+    metadata.raw_es?.data_url ||
+    alert.data?.url ||
+    parsedData.data?.url ||
+    parsedData.data?.columns?.url ||
+    // try to parse URL path from full_log if present
+    extractUrlFromLog(fullLogSourceForInitial) ||
+    ""
   const url = typeof urlRaw === "object" && urlRaw?.full ? urlRaw.full : (typeof urlRaw === "string" ? urlRaw : "")
-  const httpMethod = metadata.httpMethod || parsedData.data?.protocol || ""
+  const httpMethod = metadata.httpMethod || metadata.data_protocol || parsedData.data?.protocol || ""
+  const dataId =
+    parsedData.data?.win?.eventdata?.id ||
+    parsedData.data?.id ||
+    parsedData.data?.columns?.id ||
+    metadata.dataId ||
+    metadata.data_id ||
+    alert.dataId ||
+    alert.data_id ||
+    metadata.raw_es?.data_id ||
+    metadata.raw_es?.data?.id ||
+    metadata.raw_es?.id ||
+    parsedData.data?.http?.response?.status_code ||
+    parsedData.data?.http?.response?.status ||
+    ""
+
+  console.log('[WazuhAlertDetailDialog] resolved srcIp/url:', { srcIp, url, httpMethod })
   const httpStatusCode =
     metadata.httpStatusCode ||
     metadata.data_id ||
@@ -231,6 +314,16 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
   console.log('[WazuhAlertDetailDialog] resolved dataId / httpStatusCode:', { dataId, httpStatusCode, "metadata_keys": Object.keys(metadata || {}), "raw_es_keys": Object.keys(metadata.raw_es || {}) })
   const userAgent = metadata.userAgent || parsedData.data?.user_agent || ""
   
+  // Palo Alto network fields
+  const paloAltoSourceIp = metadata.raw_es?.source_ip || metadata.source_ip || ""
+  const paloAltoSourcePort = metadata.raw_es?.source_port || metadata.source_port || ""
+  const paloAltoSourceZone = metadata.raw_es?.source_zone || metadata.source_zone || ""
+  const paloAltoDestinationIp = metadata.raw_es?.destination_ip || metadata.destination_ip || ""
+  const paloAltoDestinationPort = metadata.raw_es?.destination_port || metadata.destination_port || ""
+  const paloAltoDestinationZone = metadata.raw_es?.destination_zone || metadata.destination_zone || ""
+  const paloAltoVendorEventAction = metadata.raw_es?.vendor_event_action || metadata.vendor_event_action || ""
+  const paloAltoNetworkTransport = metadata.raw_es?.network_transport || metadata.network_transport || ""
+  
   // Helper: determine whether a candidate value looks like an HTTP status code
   const looksLikeHttpStatus = (v: any) => {
     if (v === undefined || v === null) return false
@@ -248,6 +341,10 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
     parsedData.data?.win?.eventdata?.sourceIp ||
     parsedData.data?.win?.eventdata?.destinationIp ||
     parsedData.data?.srcip ||
+    metadata.data_srcip ||
+    alert.data_srcip ||
+    alert.source ||
+    alert.gl2_remote_ip ||
     parsedData.data?.dstip ||
     parsedData.data?.columns?.remote_address ||
     parsedData.data?.columns?.local_address ||
@@ -260,7 +357,16 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
     url || // Also show if we have web request data
     remip ||
     remipCountryCode ||
-    remoteUser
+    remoteUser ||
+    // Include Palo Alto fields
+    paloAltoSourceIp ||
+    paloAltoSourcePort ||
+    paloAltoSourceZone ||
+    paloAltoDestinationIp ||
+    paloAltoDestinationPort ||
+    paloAltoDestinationZone ||
+    paloAltoVendorEventAction ||
+    paloAltoNetworkTransport
   )
   
   const mitreTactic = metadata.mitreTactic || parsedData.rule?.mitre?.tactic?.[0]
@@ -935,6 +1041,23 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                         </div>
                       </div>
                     )}
+                    {paloAltoSourceIp && paloAltoSourceIp !== srcIp && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">FW Source IP</label>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-mono">{paloAltoSourceIp}</p>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleCheckIpReputation(paloAltoSourceIp)}
+                          >
+                            <ShieldCheck className="h-3 w-3 mr-1" />
+                            Check
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     {dstIp && (
                       <div>
                         <label className="text-sm font-medium text-muted-foreground">Destination IP</label>
@@ -945,6 +1068,23 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                             size="sm" 
                             className="h-6 px-2 text-xs"
                             onClick={() => handleCheckIpReputation(dstIp)}
+                          >
+                            <ShieldCheck className="h-3 w-3 mr-1" />
+                            Check
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {paloAltoDestinationIp && paloAltoDestinationIp !== dstIp && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">FW Destination IP</label>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-mono">{paloAltoDestinationIp}</p>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleCheckIpReputation(paloAltoDestinationIp)}
                           >
                             <ShieldCheck className="h-3 w-3 mr-1" />
                             Check
@@ -981,10 +1121,46 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                         <p className="text-sm">{srcPort}</p>
                       </div>
                     )}
+                    {paloAltoSourcePort && paloAltoSourcePort !== srcPort && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">FW Source Port</label>
+                        <p className="text-sm">{paloAltoSourcePort}</p>
+                      </div>
+                    )}
                     {dstPort && (
                       <div>
                         <label className="text-sm font-medium text-muted-foreground">Destination Port</label>
                         <p className="text-sm">{dstPort}</p>
+                      </div>
+                    )}
+                    {paloAltoDestinationPort && paloAltoDestinationPort !== dstPort && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">FW Destination Port</label>
+                        <p className="text-sm">{paloAltoDestinationPort}</p>
+                      </div>
+                    )}
+                    {paloAltoSourceZone && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source Zone</label>
+                        <p className="text-sm">{paloAltoSourceZone}</p>
+                      </div>
+                    )}
+                    {paloAltoDestinationZone && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination Zone</label>
+                        <p className="text-sm">{paloAltoDestinationZone}</p>
+                      </div>
+                    )}
+                    {paloAltoVendorEventAction && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Event Action</label>
+                        <Badge variant="outline">{paloAltoVendorEventAction}</Badge>
+                      </div>
+                    )}
+                    {(paloAltoNetworkTransport || protocol) && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Transport</label>
+                        <p className="text-sm">{(paloAltoNetworkTransport || protocol || "").toUpperCase()}</p>
                       </div>
                     )}
                     {protocol && !httpMethod && (
@@ -1193,6 +1369,295 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                 </CardContent>
               </Card>
             )}
+
+            {/* Palo Alto Extended Fields */}
+            {metadata.raw_es && /palo.?alto/i.test(alert.integrationId || "") && (
+              <Card className="w-full">
+                <CardHeader>
+                  <CardTitle className="text-base">Palo Alto Extended Fields</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    {/* Event Information */}
+                    {metadata.raw_es.event_log_name && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Event Log Name</label>
+                        <p className="text-sm">{metadata.raw_es.event_log_name}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.pan_log_subtype && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Log Subtype</label>
+                        <p className="text-sm">{metadata.raw_es.pan_log_subtype}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.vendor_event_action && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Event Action</label>
+                        <p className="text-sm">{metadata.raw_es.vendor_event_action}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.event_observer_id && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Observer ID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.event_observer_id}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.event_observer_hostname && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Observer Hostname</label>
+                        <p className="text-sm">{metadata.raw_es.event_observer_hostname}</p>
+                      </div>
+                    )}
+
+                    {/* Threat Intelligence */}
+                    {metadata.raw_es.alert_indicator && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert Indicator</label>
+                        <p className="text-sm font-mono break-all">{metadata.raw_es.alert_indicator}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.alert_signature && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert Signature</label>
+                        <p className="text-sm font-mono break-all">{metadata.raw_es.alert_signature}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.alert_definitions_version && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Threat Definition Version</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.alert_definitions_version}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.alert_id && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert ID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.alert_id}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.vendor_alert_severity && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert Severity</label>
+                        <Badge variant="outline">{metadata.raw_es.vendor_alert_severity}</Badge>
+                      </div>
+                    )}
+
+                    {/* Policy & Zones */}
+                    {metadata.raw_es.rule_name && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Rule Name</label>
+                        <p className="text-sm">{metadata.raw_es.rule_name}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.policy_uid && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Policy UID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.policy_uid}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.source_zone && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source Zone</label>
+                        <p className="text-sm">{metadata.raw_es.source_zone}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.destination_zone && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination Zone</label>
+                        <p className="text-sm">{metadata.raw_es.destination_zone}</p>
+                      </div>
+                    )}
+
+                    {/* Network Details */}
+                    {metadata.raw_es.network_interface_in && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Interface In</label>
+                        <p className="text-sm">{metadata.raw_es.network_interface_in}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.network_interface_out && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Interface Out</label>
+                        <p className="text-sm">{metadata.raw_es.network_interface_out}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.network_transport && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Transport</label>
+                        <p className="text-sm">{metadata.raw_es.network_transport.toUpperCase()}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.network_tunnel_type && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Tunnel Type</label>
+                        <p className="text-sm">{metadata.raw_es.network_tunnel_type}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.session_id && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Session ID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.session_id}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.event_uid && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Event UID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.event_uid}</p>
+                      </div>
+                    )}
+
+                    {/* Geolocation */}
+                    {metadata.raw_es.source_ip_city_name && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source City</label>
+                        <p className="text-sm">{metadata.raw_es.source_ip_city_name}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.destination_ip_city_name && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination City</label>
+                        <p className="text-sm">{metadata.raw_es.destination_ip_city_name}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.source_ip_geolocation && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source Geolocation</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.source_ip_geolocation}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.destination_ip_geolocation && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination Geolocation</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.destination_ip_geolocation}</p>
+                      </div>
+                    )}
+
+                    {/* NAT Information */}
+                    {metadata.raw_es.source_nat_ip && metadata.raw_es.source_nat_ip !== "0.0.0.0" && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source NAT IP</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.source_nat_ip}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.source_nat_port && metadata.raw_es.source_nat_port !== 0 && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Source NAT Port</label>
+                        <p className="text-sm">{metadata.raw_es.source_nat_port}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.destination_nat_ip && metadata.raw_es.destination_nat_ip !== "0.0.0.0" && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination NAT IP</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.destination_nat_ip}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.destination_nat_port && metadata.raw_es.destination_nat_port !== 0 && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Destination NAT Port</label>
+                        <p className="text-sm">{metadata.raw_es.destination_nat_port}</p>
+                      </div>
+                    )}
+
+                    {/* Application & Categories */}
+                    {metadata.raw_es.application_name && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Application Name</label>
+                        <p className="text-sm">{metadata.raw_es.application_name}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.syslog_categories && Array.isArray(metadata.raw_es.syslog_categories) && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Categories</label>
+                        <div className="space-y-1">
+                          {metadata.raw_es.syslog_categories.map((cat: string, idx: number) => (
+                            <Badge key={idx} variant="secondary">{cat}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {metadata.raw_es.alert_category && Array.isArray(metadata.raw_es.alert_category) && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert Categories</label>
+                        <div className="space-y-1">
+                          {metadata.raw_es.alert_category.map((cat: string, idx: number) => (
+                            <Badge key={idx} variant="outline">{cat}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Action & Forwarding */}
+                    {metadata.raw_es.pan_log_action && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Log Action</label>
+                        <p className="text-sm">{metadata.raw_es.pan_log_action}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.pan_alert_direction && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Alert Direction</label>
+                        <p className="text-sm">{metadata.raw_es.pan_alert_direction}</p>
+                      </div>
+                    )}
+
+                    {/* Device & Virtualization */}
+                    {metadata.raw_es.host_virtfw_id && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Virtual Firewall ID</label>
+                        <p className="text-sm">{metadata.raw_es.host_virtfw_id}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.pan_high_res_time && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">High Resolution Time</label>
+                        <p className="text-sm">{metadata.raw_es.pan_high_res_time}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.event_repeat_count && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Repeat Count</label>
+                        <p className="text-sm">{metadata.raw_es.event_repeat_count}</p>
+                      </div>
+                    )}
+
+                    {/* Other Important Fields */}
+                    {metadata.raw_es.pan_ppid && metadata.raw_es.pan_ppid !== 4294967295 && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Parent Process ID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.pan_ppid}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.pan_pcap_id && metadata.raw_es.pan_pcap_id !== "0" && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">PCAP ID</label>
+                        <p className="text-sm font-mono">{metadata.raw_es.pan_pcap_id}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.syslog_customer && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Customer</label>
+                        <p className="text-sm">{metadata.raw_es.syslog_customer}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.event_received_time && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Event Received Time</label>
+                        <p className="text-sm">{new Date(metadata.raw_es.event_received_time).toLocaleString()}</p>
+                      </div>
+                    )}
+                    {metadata.raw_es.ingest_timestamp_utc && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Ingest Timestamp</label>
+                        <p className="text-sm">{new Date(metadata.raw_es.ingest_timestamp_utc).toLocaleString()}</p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Analysis & Findings */}
+            <AlertAnalysisSection alertId={alert.id} integrationId={alert.integrationId} />
 
             {/* Raw JSON Data - Show full alert object with all nested fields */}
             <Card>

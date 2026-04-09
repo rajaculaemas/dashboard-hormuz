@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
+import { TelegramSetupPanel } from '@/components/admin/telegram-setup-panel';
 import {
   Table,
   TableBody,
@@ -39,6 +40,8 @@ interface User {
   email: string;
   name: string;
   role: 'administrator' | 'analyst' | 'read-only';
+  position?: string; // "Analyst L1", "Analyst L2", "Analyst L3", "Security Engineer", "Manager"
+  telegramChatId?: string; // User's Telegram chat ID
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -65,8 +68,12 @@ export default function AdminPage() {
     name: '',
     password: '',
     role: 'analyst' as const,
+    position: '',
+    telegramChatId: '',
     integrationIds: [] as string[],
+    stellarCyberApiKey: '',
   });
+  const [userStellarKeys, setUserStellarKeys] = useState<{ [key: string]: boolean }>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
 
@@ -93,6 +100,21 @@ export default function AdminPage() {
 
       const data = await response.json();
       setUsers(data.users || []);
+      
+      // Fetch Stellar API key status for all users
+      const keyStatus: { [key: string]: boolean } = {};
+      for (const u of data.users) {
+        try {
+          const keyResponse = await fetch(`/api/users/${u.id}/stellar-key`);
+          if (keyResponse.ok) {
+            const keyData = await keyResponse.json();
+            keyStatus[u.id] = keyData.hasApiKey;
+          }
+        } catch (err) {
+          keyStatus[u.id] = false;
+        }
+      }
+      setUserStellarKeys(keyStatus);
     } catch (error) {
       toast({
         title: 'Error',
@@ -136,12 +158,35 @@ export default function AdminPage() {
           body: JSON.stringify({
             name: formData.name,
             role: formData.role,
+            position: formData.position || null,
+            telegramChatId: formData.telegramChatId || null,
             integrationIds: formData.integrationIds,
             ...(formData.password && { password: formData.password }),
           }),
         });
 
         if (!response.ok) throw new Error('Failed to update user');
+
+        // Save Stellar API key if provided
+        if (formData.stellarCyberApiKey.trim()) {
+          try {
+            const stellarResponse = await fetch(`/api/users/${editingUser.id}/stellar-key`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiKey: formData.stellarCyberApiKey }),
+            });
+
+            if (!stellarResponse.ok) {
+              throw new Error('Failed to save Stellar API key');
+            }
+          } catch (error: any) {
+            toast({
+              title: 'Warning',
+              description: error.message || 'Failed to save Stellar API key',
+              variant: 'destructive',
+            });
+          }
+        }
 
         toast({
           title: 'Success',
@@ -150,7 +195,7 @@ export default function AdminPage() {
 
         setOpenDialog(false);
         setEditingUser(null);
-        setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+        setFormData({ email: '', name: '', password: '', role: 'analyst', position: '', telegramChatId: '', integrationIds: [], stellarCyberApiKey: '' });
         fetchUsers();
       } catch (error) {
         toast({
@@ -173,7 +218,11 @@ export default function AdminPage() {
         const response = await fetch('/api/auth/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData),
+          body: JSON.stringify({
+            ...formData,
+            position: formData.position || null,
+            telegramChatId: formData.telegramChatId || null,
+          }),
         });
 
         if (!response.ok) throw new Error('Failed to create user');
@@ -184,7 +233,7 @@ export default function AdminPage() {
         });
 
         setOpenDialog(false);
-        setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+        setFormData({ email: '', name: '', password: '', role: 'analyst', position: '', integrationIds: [], stellarCyberApiKey: '' });
         fetchUsers();
       } catch (error) {
         toast({
@@ -203,7 +252,10 @@ export default function AdminPage() {
       name: u.name,
       password: '',
       role: u.role,
+      position: u.position || '',
+      telegramChatId: u.telegramChatId || '',
       integrationIds: u.assignedIntegrations?.map(ai => ai.integrationId) || [],
+      stellarCyberApiKey: '',
     });
     setOpenDialog(true);
   };
@@ -236,7 +288,7 @@ export default function AdminPage() {
   const handleCloseDialog = () => {
     setOpenDialog(false);
     setEditingUser(null);
-    setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+    setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [], stellarCyberApiKey: '' });
   };
 
   const toggleIntegration = (integrationId: string) => {
@@ -281,7 +333,7 @@ export default function AdminPage() {
             <Button
               onClick={() => {
                 setEditingUser(null);
-                setFormData({ email: '', name: '', password: '', role: 'analyst', integrationIds: [] });
+                setFormData({ email: '', name: '', password: '', role: 'analyst', position: '', telegramChatId: '', integrationIds: [], stellarCyberApiKey: '' });
               }}
             >
               <Plus className="w-4 h-4 mr-2" />
@@ -301,7 +353,7 @@ export default function AdminPage() {
                   id="email"
                   type="email"
                   placeholder="user@example.com"
-                  value={formData.email}
+                  value={formData.email ?? ''}
                   onChange={(e) =>
                     setFormData({ ...formData, email: e.target.value })
                   }
@@ -315,7 +367,7 @@ export default function AdminPage() {
                 <Input
                   id="name"
                   placeholder="Full Name"
-                  value={formData.name}
+                  value={formData.name ?? ''}
                   onChange={(e) =>
                     setFormData({ ...formData, name: e.target.value })
                   }
@@ -331,7 +383,7 @@ export default function AdminPage() {
                   id="password"
                   type="password"
                   placeholder="••••••••"
-                  value={formData.password}
+                  value={formData.password ?? ''}
                   onChange={(e) =>
                     setFormData({ ...formData, password: e.target.value })
                   }
@@ -357,6 +409,88 @@ export default function AdminPage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              <div>
+                <Label htmlFor="position">Position</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={formData.position || "none"}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, position: value === "none" ? "" : value })
+                    }
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Select position (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="Analyst L1">Analyst L1</SelectItem>
+                      <SelectItem value="Analyst L2">Analyst L2</SelectItem>
+                      <SelectItem value="Analyst L3">Analyst L3</SelectItem>
+                      <SelectItem value="Security Engineer">Security Engineer</SelectItem>
+                      <SelectItem value="Manager">Manager</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {formData.position && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFormData({ ...formData, position: "" })}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="telegramChatId">Telegram Chat ID (optional)</Label>
+                <Input
+                  id="telegramChatId"
+                  placeholder="Enter Telegram chat ID"
+                  value={formData.telegramChatId ?? ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, telegramChatId: e.target.value })
+                  }
+                />
+              </div>
+
+              {editingUser && (
+                <div className="border-t pt-4">
+                  <Label className="text-base font-semibold mb-3 block">
+                    Stellar Cyber API Key
+                  </Label>
+                  {userStellarKeys[editingUser.id] ? (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-3">
+                      <p className="text-sm text-green-800">
+                        ✓ User has Stellar Cyber API Key configured
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-3">
+                      <p className="text-sm text-yellow-800">
+                        No Stellar Cyber API Key configured for this user
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <Label htmlFor="stellarApiKey">Add or Update API Key</Label>
+                    <Input
+                      id="stellarApiKey"
+                      type="password"
+                      placeholder="Paste Stellar Cyber API key here"
+                      value={formData.stellarCyberApiKey ?? ''}
+                      onChange={(e) =>
+                        setFormData({ ...formData, stellarCyberApiKey: e.target.value })
+                      }
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Leave empty to keep current key
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {formData.role !== 'administrator' && (
                 <div className="border-t pt-4">
@@ -447,7 +581,10 @@ export default function AdminPage() {
                     <TableHead>Email</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Role</TableHead>
+                    <TableHead>Position</TableHead>
+                    <TableHead>Telegram Chat ID</TableHead>
                     <TableHead>Assigned Integrations</TableHead>
+                    <TableHead>Stellar API Key</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -456,7 +593,7 @@ export default function AdminPage() {
                 <TableBody>
                   {filteredUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
+                      <TableCell colSpan={10} className="text-center py-8">
                         No users found
                       </TableCell>
                     </TableRow>
@@ -469,6 +606,28 @@ export default function AdminPage() {
                           <span className="px-2 py-1 rounded-full text-sm bg-blue-100 text-blue-800">
                             {u.role}
                           </span>
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {u.position ? (
+                            <span className="px-2 py-1 rounded-full text-sm bg-purple-100 text-purple-800">
+                              {u.position}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {u.telegramChatId ? (
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                              <span className="text-sm text-green-700 font-medium">Configured</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-gray-400"></div>
+                              <span className="text-sm text-gray-600">Not Set</span>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm">
                           {u.role === 'administrator' ? (
@@ -486,6 +645,19 @@ export default function AdminPage() {
                             </div>
                           ) : (
                             <span className="text-gray-500 text-xs">None assigned</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {userStellarKeys[u.id] ? (
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                              <span className="text-sm text-green-700 font-medium">Configured</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-gray-400"></div>
+                              <span className="text-sm text-gray-600">Not Set</span>
+                            </div>
                           )}
                         </TableCell>
                         <TableCell>
@@ -553,6 +725,10 @@ export default function AdminPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Telegram Bot Setup */}
+      <h2 className="text-2xl font-bold">Telegram Bot Integration</h2>
+      <TelegramSetupPanel />
     </div>
   );
 }

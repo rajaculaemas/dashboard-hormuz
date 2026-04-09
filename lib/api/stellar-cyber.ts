@@ -200,7 +200,54 @@ async function getStellarCyberCredentials(integrationId?: string) {
   }
 }
 
-// Fungsi untuk mendapatkan access token
+// Fungsi untuk mendapatkan access token dari JWT API key
+async function getAccessTokenFromJWT(host: string, jwtApiKey: string): Promise<string> {
+  const url = `https://${host}/connect/api/v1/access_token`
+
+  try {
+    console.log(`[StellarCyber] Getting access token from JWT via ${url}`)
+
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${jwtApiKey}`,
+          "Content-Type": "application/json",
+        },
+      })
+
+      console.log(`[StellarCyber] Access token response status: ${response.status}`)
+
+      if (!response.ok) {
+        console.error(`[StellarCyber] Failed to get access token: ${response.status} ${response.statusText}`)
+        return ""
+      }
+
+      const data = await response.json()
+      const token =
+        data.access_token ||
+        data.token ||
+        (data.data && (data.data.access_token || data.data.token)) ||
+        ""
+
+      if (token) {
+        console.log(`[StellarCyber] Access token obtained successfully`)
+        return token
+      }
+
+      console.warn(`[StellarCyber] No access token found in response`)
+      return ""
+    } finally {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    }
+  } catch (error) {
+    console.error(`[StellarCyber] Error getting access token from JWT:`, error)
+    return ""
+  }
+}
+
+// Fungsi untuk mendapatkan access token (backward compatible)
 export async function getAccessToken(integrationId?: string): Promise<string> {
   const { HOST, USER_ID, REFRESH_TOKEN, TENANT_ID } = await getStellarCyberCredentials(integrationId)
 
@@ -619,81 +666,223 @@ function generateMockAlerts(): StellarCyberAlert[] {
 export async function updateAlertStatus(params: {
   index: string
   alertId: string
-  status: AlertStatus
+  status?: AlertStatus
   comments?: string
   assignee?: string
+  tagsToAdd?: string[]
+  tagsToDelete?: string[]
   integrationId?: string
+  userId?: string  // Use user's personal JWT API key if provided
 }): Promise<any> {
-  const { index, alertId, status, comments = "", assignee, integrationId } = params
-  const { HOST, USER_ID, REFRESH_TOKEN, API_KEY } = await getStellarCyberCredentials(integrationId)
+  const { index, alertId, status, comments, assignee, tagsToAdd, tagsToDelete, integrationId, userId } = params
 
-  // Prefer API key auth (documented for update_ser). Fallback to bearer token if only refresh token exists.
-  const hasBasicAuth = !!(USER_ID && API_KEY)
-  const canFetchToken = !!(USER_ID && REFRESH_TOKEN)
+  // Validate that we have at least one field to update
+  if (!status && !comments && !assignee && !tagsToAdd?.length && !tagsToDelete?.length) {
+    return {
+      success: false,
+      message: "No fields provided to update. Provide at least one of: status, comments, assignee, tagsToAdd, tagsToDelete",
+    }
+  }
 
-  if (!HOST || HOST === "localhost" || (!hasBasicAuth && !canFetchToken)) {
-    console.warn("Stellar Cyber credentials not properly configured. Using mock response.")
+  // Validate index format - must have trailing dash
+  if (!index || !index.includes("-")) {
+    console.warn(`[StellarCyber] Warning: index might be invalid format: ${index}`)
+  }
+
+  let userJwtKey: string | null = null
+  let stellarHost: string | null = null
+
+  // User JWT API key is REQUIRED for Stellar Cyber updates
+  if (!userId) {
+    console.error("[StellarCyber] User ID not provided")
+    return {
+      success: false,
+      requiresAuth: true,
+      message: "User ID is required for Stellar Cyber alert updates",
+    }
+  }
+
+  try {
+    console.log(`[StellarCyber] Fetching JWT API key for user ${userId}`)
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { stellarCyberApiKey: true },
+    })
+    userJwtKey = user?.stellarCyberApiKey || null
+
+    if (!userJwtKey || userJwtKey.trim() === "") {
+      console.warn(`[StellarCyber] User ${userId} does not have Stellar Cyber JWT API key configured`)
+      return {
+        success: false,
+        requiresSetup: true,
+        message: "You must configure your Stellar Cyber JWT API key in Profile Settings before updating alerts",
+        setupUrl: "/dashboard/profile",
+      }
+    }
+
+    console.log(`[StellarCyber] ✓ Using JWT API key from user ${userId}`)
+
+    // Get HOST from integration
+    const integration = await prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { credentials: true },
+    })
+
+    if (integration?.credentials) {
+      let credentials: Record<string, any> = {}
+      if (Array.isArray(integration.credentials)) {
+        const credentialsArray = integration.credentials as any[]
+        credentialsArray.forEach((cred) => {
+          if (cred && typeof cred === "object" && "key" in cred && "value" in cred) {
+            credentials[cred.key] = cred.value
+          }
+        })
+      } else {
+        credentials = (integration.credentials as Record<string, any>) || {}
+      }
+
+      stellarHost =
+        credentials.host ||
+        credentials.STELLAR_CYBER_HOST ||
+        credentials.stellar_host ||
+        credentials.api_host ||
+        ""
+    }
+  } catch (error) {
+    console.error("[StellarCyber] Error fetching user JWT API key:", error)
+    return {
+      success: false,
+      requiresSetup: true,
+      message: "Error validating Stellar Cyber credentials. Please check your profile settings.",
+      setupUrl: "/dashboard/profile",
+    }
+  }
+
+  if (!stellarHost || stellarHost === "localhost") {
+    console.warn("[StellarCyber] Stellar Cyber host not configured in integration")
+    return {
+      success: false,
+      message: "Stellar Cyber host not configured in integration settings",
+    }
+  }
+
+  if (!stellarHost || stellarHost === "localhost") {
+    console.warn("[StellarCyber] Host is localhost or not configured")
     return { success: true, message: "Status updated (mock)" }
   }
 
   try {
-    const url = urlunparse({
-      protocol: "https",
-      hostname: HOST,
-      pathname: "/connect/api/update_ser",
-    })
+    // Step 1: Get access token from user's JWT API key
+    console.log(`[StellarCyber] Getting access token from user's JWT API key`)
+    const accessToken = await getAccessTokenFromJWT(stellarHost, userJwtKey)
 
-    const headers = {
-      "Content-Type": "application/json",
-    } as Record<string, string>
-
-    if (hasBasicAuth) {
-      headers.Authorization = "Basic " + Buffer.from(`${USER_ID}:${API_KEY}`).toString("base64")
-    } else {
-      const token = await getAccessToken(integrationId)
-      if (token === "dummy-access-token-for-development" || token === "error-token-for-fallback") {
-        return { success: true, message: "Status updated (mock)" }
+    if (!accessToken) {
+      return {
+        success: false,
+        message: "Failed to authenticate with Stellar Cyber. Please verify your JWT API key in Profile Settings.",
+        setupUrl: "/dashboard/profile",
       }
-      headers.Authorization = `Bearer ${token}`
     }
 
-    const payload = {
+    // Step 2: Prepare update payload
+    const payload: any = {
       index,
       _id: alertId,
-      status,
-      ...(comments && { comments }),
-      ...(assignee && { assignee }),
     }
 
-    console.log("Updating alert status with payload:", payload)
+    if (status) {
+      payload.status = status
+    }
 
-    // Allow self-signed certs for this request
+    if (comments) {
+      payload.comments = comments
+    }
+
+    // NOTE: Stellar Cyber API does NOT support "assignee" field
+    // Assignee is only supported by Socfortress and QRadar integrations
+    // Do NOT add assignee to the payload for Stellar Cyber
+
+    // Handle tags with add/delete operations
+    const eventTags: any[] = []
+
+    if (tagsToAdd && tagsToAdd.length > 0) {
+      for (const tag of tagsToAdd) {
+        if (tag && String(tag).trim()) {
+          eventTags.push({
+            op: "add",
+            tag: tag,
+          })
+        }
+      }
+    }
+
+    if (tagsToDelete && tagsToDelete.length > 0) {
+      for (const tag of tagsToDelete) {
+        if (tag && String(tag).trim()) {
+          eventTags.push({
+            op: "delete",
+            tag: tag,
+          })
+        }
+      }
+    }
+
+    if (eventTags.length > 0) {
+      payload.event_tags = eventTags
+    }
+
+    console.log("[StellarCyber] Update payload:", JSON.stringify(payload, null, 2))
+
+    // Step 3: Call update endpoint
+    const updateUrl = `https://${stellarHost}/connect/api/update_ser`
+
+    console.log(`[StellarCyber] Calling POST ${updateUrl}`)
+
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
     try {
-      const response = await fetch(url, {
+      const response = await fetch(updateUrl, {
         method: "POST",
-        headers,
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(payload),
       })
 
+      console.log(`[StellarCyber] Update response status: ${response.status}`)
+
       const responseText = await response.text()
-      console.log("Update status response:", response.status, responseText)
+      console.log(`[StellarCyber] Update response body: ${responseText.substring(0, 500)}`)
 
       if (!response.ok) {
-        console.error(`Failed to update alert status: ${response.status} ${response.statusText}`)
-        return { success: false, message: responseText || "Failed to update status" }
+        console.error(`[StellarCyber] Failed to update alert: ${response.status} ${response.statusText}`)
+        return {
+          success: false,
+          message: `Failed to update alert: ${responseText || "Unknown error"}`,
+        }
       }
 
       try {
-        return JSON.parse(responseText)
+        const responseData = JSON.parse(responseText)
+        return {
+          success: true,
+          message: "Alert updated successfully",
+          data: responseData,
+        }
       } catch {
-        return { success: true, message: responseText || "Status updated" }
+        return {
+          success: true,
+          message: responseText || "Alert updated successfully",
+        }
       }
     } finally {
       delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
     }
   } catch (error) {
-    console.error("Error updating alert status:", error)
-    return { success: false, message: "Error updating status" }
+    console.error("[StellarCyber] Error updating alert status:", error)
+    return {
+      success: false,
+      message: `Error updating alert: ${error instanceof Error ? error.message : "Unknown error"}`,
+    }
   }
 }

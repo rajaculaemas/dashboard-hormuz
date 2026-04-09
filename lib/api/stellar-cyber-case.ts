@@ -577,6 +577,7 @@ export async function getCaseAlerts(params: { caseId: string; integrationId?: st
 export async function updateCaseInStellarCyber(params: {
   caseId: string
   integrationId?: string
+  userId?: string  // New: Use user's personal API key if provided
   updates: {
     status?: string
     assignee?: string
@@ -584,6 +585,108 @@ export async function updateCaseInStellarCyber(params: {
   }
 }) {
   try {
+    // Try to get user's Stellar API key first if userId is provided
+    let userApiKey: string | null = null
+    let stellarHost: string | null = null
+
+    if (params.userId) {
+      try {
+        const user = await prisma.user.findUnique({
+          where: { id: params.userId },
+          select: { stellarCyberApiKey: true },
+        })
+        userApiKey = user?.stellarCyberApiKey || null
+
+        if (!userApiKey) {
+          console.warn(`User ${params.userId} does not have Stellar Cyber API key configured`)
+          return {
+            success: false,
+            message: "User does not have Stellar Cyber API key configured. Please add it in your profile settings.",
+          }
+        }
+
+        // Get HOST from integration for the API endpoint
+        const integration = await prisma.integration.findUnique({
+          where: { id: params.integrationId },
+          select: { credentials: true },
+        })
+
+        if (integration?.credentials) {
+          let credentials: Record<string, any> = {}
+          if (Array.isArray(integration.credentials)) {
+            const credentialsArray = integration.credentials as any[]
+            credentialsArray.forEach((cred) => {
+              if (cred && typeof cred === "object" && "key" in cred && "value" in cred) {
+                credentials[cred.key] = cred.value
+              }
+            })
+          } else {
+            credentials = (integration.credentials as Record<string, any>) || {}
+          }
+
+          stellarHost =
+            credentials.host ||
+            credentials.STELLAR_CYBER_HOST ||
+            credentials.stellar_host ||
+            credentials.api_host ||
+            ""
+        }
+      } catch (error) {
+        console.error("Error fetching user Stellar API key:", error)
+        return { success: false, message: "Error validating user credentials" }
+      }
+    }
+
+    // If user has API key, use client with user credentials
+    if (userApiKey && stellarHost) {
+      console.log(`Using API key from user ${params.userId} for case update`)
+      
+      // Create a client with dummy credentials since we'll override the token
+      const client = new StellarCyberCaseClient(stellarHost, "dummy-user", "dummy-tenant", "dummy-token")
+      
+      // Make direct request with user API key
+      const url = `${client["baseUrl"]}/cases/${params.caseId}`
+      
+      const originalRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+      if (stellarHost.startsWith("https://")) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      }
+
+      try {
+        const response = await fetch(url, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${userApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(params.updates),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error("API error:", errorText)
+          return {
+            success: false,
+            message: `Failed to update case: ${response.status} - ${errorText}`,
+          }
+        }
+
+        const result = await response.json()
+        console.log("Case updated successfully in Stellar Cyber:", result)
+
+        return {
+          success: true,
+          data: result.data || result,
+          message: "Case updated successfully",
+        }
+      } finally {
+        if (originalRejectUnauthorized !== undefined) {
+          process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalRejectUnauthorized
+        }
+      }
+    }
+
+    // Fallback to integration credentials
     const credentials = await getStellarCyberCredentials(params.integrationId)
 
     if (!credentials.HOST || !credentials.USER_ID || !credentials.TENANT_ID || !credentials.REFRESH_TOKEN) {

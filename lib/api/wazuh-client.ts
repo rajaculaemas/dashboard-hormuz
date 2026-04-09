@@ -75,18 +75,18 @@ export class WazuhClient {
 
       const url = `${this.elasticsearch_url}/${indexPattern}/_search`
       const isFortinet = /fortinet/i.test(indexPattern)
+      const isPaloAlto = /palo.?alto/i.test(indexPattern)
 
       const baseQuery: any = {
         size: pageSize,
-        // Avoid sorting on `@timestamp` for Fortinet indices because some
-        // Fortinet indices do not define that field in their mapping and
-        // Elasticsearch will reject the query. Sort only by `timestamp` to
-        // avoid fielddata pressure from sorting on `_id` which can trigger
-        // circuit_breaking exceptions on large indices.
+        // Avoid sorting on `@timestamp` for Fortinet/Palo Alto indices because some
+        // indices do not define that field in their mapping and Elasticsearch will
+        // reject the query. Sort only by `timestamp` to avoid fielddata pressure from
+        // sorting on `_id` which can trigger circuit_breaking exceptions on large indices.
         sort: [{ timestamp: { order: "desc", missing: "_last" } }],
         query: {
           bool: {
-            must: isFortinet ? [] : [{ term: { syslog_level: "ALERT" } }],
+            must: (isFortinet || isPaloAlto) ? [] : [{ term: { syslog_level: "ALERT" } }],
             // Match any of several common timestamp fields. Some Wazuh indices use
             // `timestamp_utc`, others use `timestamp`, `@timestamp` or `msg_timestamp`.
             // Use a `should` clause so documents that have any of these fields in
@@ -136,6 +136,13 @@ export class WazuhClient {
         baseQuery.query.bool.must_not.push({ term: { remip_country_code: 'ID' } })
       }
 
+      if (isPaloAlto) {
+        // For Palo Alto, filter for THREAT events with ALERT level
+        baseQuery.query.bool.filter.push({ term: { event_log_name: 'THREAT' } })
+        baseQuery.query.bool.must = baseQuery.query.bool.must || []
+        baseQuery.query.bool.must.push({ term: { syslog_level: 'ALERT' } })
+      }
+
       let searchAfter: any[] | undefined
 
       while (alertsMap.size < maxAlerts) {
@@ -165,6 +172,14 @@ export class WazuhClient {
           try {
             const sample = hits[0]
             console.log(`[WazuhClient][Fortinet] sample hit id=${sample._id} action=${sample._source?.action} remip_cc=${sample._source?.remip_country_code}`)
+          } catch (e) {
+            // ignore logging errors
+          }
+        }
+        if (isPaloAlto && hits.length > 0) {
+          try {
+            const sample = hits[0]
+            console.log(`[WazuhClient][PaloAlto] sample hit id=${sample._id} event_log_name=${sample._source?.event_log_name} syslog_level=${sample._source?.syslog_level}`)
           } catch (e) {
             // ignore logging errors
           }
@@ -222,6 +237,8 @@ export class WazuhClient {
         }
 
         if (isFortinet) break // single-page for Fortinet indices
+
+        if (isPaloAlto) break // single-page for Palo Alto indices
 
         const last = hits[hits.length - 1]
         searchAfter = last?.sort

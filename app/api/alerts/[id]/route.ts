@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { updateAlertStatus as updateStellarCyberAlertStatus } from "@/lib/api/stellar-cyber"
+import { updateSocfortressAlertStatus } from "@/lib/api/socfortress"
 import { QRadarClient } from "@/lib/api/qradar"
 import type { AlertStatus } from "@/lib/config/stellar-cyber"
 import { getCurrentUser } from "@/lib/auth/session"
@@ -20,7 +21,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     
     const alertId = (await params).id
     const body = await request.json()
-    const { status, comments, isQRadar, closingReasonId, shouldCreateTicket, assignedTo, severity, severityBasedOnAnalysis, analysisNotes } = body
+    const { status, comments, isQRadar, closingReasonId, shouldCreateTicket, assignedTo, severity, severityBasedOnAnalysis, analysisNotes, userId } = body
 
     if (!alertId || !status) {
       return NextResponse.json({ error: "Missing required fields: id or status" }, { status: 400 })
@@ -91,11 +92,14 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     })
 
     // Record timeline events
+    // Use UTC ISO string for consistent timezone handling
+    const currentTimestampIso = new Date().toISOString()
     const timelineEvents: any[] = []
 
     // Only record status change if it actually changed
     if (previousStatus !== status) {
       console.log(`[PATCH] Recording status change timeline: "${previousStatus}" → "${status}"`)
+      console.log(`[PATCH] Timeline timestamp (UTC ISO): ${currentTimestampIso}`)
       timelineEvents.push({
         alertId,
         eventType: "status_change",
@@ -104,7 +108,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         newValue: status,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: new Date(currentTimestampIso),
       })
     } else {
       console.log(`[PATCH] Status unchanged (${status}), skipping timeline entry`)
@@ -119,7 +123,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         newValue: severity,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: new Date(currentTimestampIso),
       })
     }
 
@@ -130,7 +134,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         description: comments,
         changedBy: user.name || user.email || "System",
         changedByUserId: user.id,
-        timestamp: new Date(),
+        timestamp: new Date(currentTimestampIso),
       })
     }
 
@@ -295,17 +299,64 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
           console.warn("[StellarCyber] Missing index for alert", { alertId, externalId: alert.externalId, metaKeys: Object.keys(meta || {}) })
         }
 
+        // Parse tagsToAdd and tagsToDelete if provided as strings
+        let tagsToAdd: string[] | undefined
+        let tagsToDelete: string[] | undefined
+
+        if (body.tagsToAdd) {
+          tagsToAdd = Array.isArray(body.tagsToAdd) ? body.tagsToAdd : [body.tagsToAdd]
+        }
+
+        if (body.tagsToDelete) {
+          tagsToDelete = Array.isArray(body.tagsToDelete) ? body.tagsToDelete : [body.tagsToDelete]
+        }
+
         await updateStellarCyberAlertStatus({
           index: computedIndex,
           alertId: eventId,
           status: status as AlertStatus,
           comments,
           assignee: assignedTo,
+          tagsToAdd,
+          tagsToDelete,
           integrationId: alert.integrationId,
+          userId: userId || user.id,
         })
       } catch (error) {
         console.error("Error updating alert status in Stellar Cyber:", error)
         // Lanjutkan meskipun gagal update di Stellar Cyber
+      }
+    } else if (alert.integration.source === "socfortress" || alert.integration.source === "copilot") {
+      // If alert is from SOCFortress, update there as well
+      try {
+        console.log(`[SOCFortress] Updating alert ${alert.externalId}...`)
+        
+        // Map UI status to SOCFortress status format
+        const statusMap: Record<string, string> = {
+          "New": "OPEN",
+          "In Progress": "IN_PROGRESS",
+          "Closed": "CLOSED",
+          "Ignored": "CLOSED",
+        }
+        
+        const socfortressStatus = statusMap[status as string] || (status as string)
+        
+        // Update in SOCFortress MySQL
+        await updateSocfortressAlertStatus(
+          alert.integrationId,
+          alert.externalId,
+          socfortressStatus,
+          {
+            comments: comments,
+            assignedTo: assignedTo,
+            severity: severity,
+          }
+        )
+        
+        console.log(`[SOCFortress] Updated alert ${alert.externalId} in MySQL`)
+      } catch (error) {
+        console.error("Error updating alert status in SOCFortress:", error)
+        // Continue even if update in SOCFortress fails
       }
     }
 

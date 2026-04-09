@@ -449,7 +449,29 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
 
   // Render AI result in a human-friendly way
   const renderAiResult = (res: any) => {
-    if (aiLoading) return <p>Analyzing...</p>
+    if (aiLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center py-8 gap-4">
+          <div className="relative">
+            <div className="relative w-16 h-16 flex items-center justify-center">
+              <svg className="w-8 h-8 text-primary z-10" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+              <svg className="absolute w-16 h-16 animate-spin text-primary/30" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+            </div>
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-medium">Analyzing your alert</p>
+            <div className="flex items-center justify-center gap-1 mt-2">
+              <span className="text-xs text-muted-foreground">Processing</span>
+              <div className="flex gap-1">
+                <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '0ms'}}></span>
+                <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '150ms'}}></span>
+                <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '300ms'}}></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
     if (!res) return <p className="text-muted-foreground">No result</p>
 
     let parsed: any = res
@@ -461,12 +483,10 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
       }
     }
 
-    // If it's still a plain string, show as preformatted text
     if (typeof parsed === "string") {
       return <pre className="whitespace-pre-wrap text-sm">{parsed}</pre>
     }
 
-    // Prefer common answer fields
     const answer = parsed.answer || parsed.answer_text || parsed.summary || (parsed.data && (parsed.data.answer || parsed.data.text))
 
     return (
@@ -474,8 +494,6 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
         {parsed.mock && parsed.message && (
           <div className="mb-2 p-2 bg-yellow-50 border border-yellow-200 text-sm rounded">{parsed.message}</div>
         )}
-
-        {/* Render metadata keys except large text fields */}
         <div className="mb-2 text-xs text-muted-foreground space-y-1">
           {Object.entries(parsed)
             .filter(([k]) => !["answer", "answer_text", "summary", "data"].includes(k))
@@ -676,13 +694,32 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                           if (!hasUserAction) {
                             const historyLength = (alert.metadata as any)?.user_action_history_count || 
                                                 (alert.metadata as any)?.user_action?.history?.length || 0
-                            console.log('[MTTD Detail] No MTTD data. Has metadata:', !!alert.metadata, 'History count:', historyLength)
-                            
-                            return (
-                              <div className="text-xs text-muted-foreground italic">
-                                MTTD data not available (history count: {historyLength})
-                              </div>
-                            )
+                            console.log('[MTTD Detail] No precomputed MTTD. Has metadata:', !!alert.metadata, 'History count:', historyLength)
+
+                            // Try fallback: use closed_time (or updatedAt) minus alert_time (or timestamp)
+                            const rawAlertTime = (alert.metadata as any)?.alert_time || (alert.metadata as any)?.timestamp || alert.timestamp || alert.createdAt || alert.created_at
+                            const rawActionTime = (alert.metadata as any)?.closed_time || alert.updatedAt || alert.updated_at
+
+                            if (rawAlertTime && rawActionTime) {
+                              const at = new Date(rawAlertTime)
+                              const act = new Date(rawActionTime)
+                              if (!isNaN(at.getTime()) && !isNaN(act.getTime())) {
+                                const fallbackMs = act.getTime() - at.getTime()
+                                if (fallbackMs >= 0) {
+                                  // use fallback value as MTTD (note: derived from closed/updated timestamps)
+                                  mttdMs = fallbackMs
+                                }
+                              }
+                            }
+
+                            // If still no MTTD, show message
+                            if (mttdMs === null || mttdMs === undefined) {
+                              return (
+                                <div className="text-xs text-muted-foreground italic">
+                                  MTTD data not available (history count: {historyLength})
+                                </div>
+                              )
+                            }
                           }
                           
                           // Convert milliseconds to minutes or seconds
@@ -1031,7 +1068,8 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
             </TabsContent>
           </Tabs>
 
-          {/* AI Analysis Modal (simple inline modal) */}
+
+          {/* AI Analysis Modal (use AiAnalysis for consistent loading/UX) */}
           {aiOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center">
               <div className="absolute inset-0 bg-black/40" />
@@ -1048,7 +1086,31 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                     <Button size="sm" variant="ghost" onClick={() => setAiOpen(false)}>Close</Button>
                   </div>
                 </div>
-                <div className="text-sm">{renderAiResult(aiResult)}</div>
+                <div className="text-sm">
+                  {/* Use the same loading UI as AiAnalysis */}
+                  {aiLoading ? (
+                    <div className="flex flex-col items-center justify-center py-8 gap-4">
+                      <div className="relative">
+                        <div className="relative w-16 h-16 flex items-center justify-center">
+                          {/* Bot icon from lucide-react */}
+                          <svg className="w-8 h-8 text-primary z-10" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><path d="M12 2v2m0 16v2m8-8h2M2 12H4m15.07-7.07l-1.41 1.41M6.34 17.66l-1.41 1.41m12.02 0l1.41-1.41M6.34 6.34L4.93 4.93" strokeLinecap="round" strokeLinejoin="round"/><rect x="8" y="8" width="8" height="8" rx="4" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>
+                          <svg className="absolute w-16 h-16 animate-spin text-primary/30" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-medium">Analyzing your alert</p>
+                        <div className="flex items-center justify-center gap-1 mt-2">
+                          <span className="text-xs text-muted-foreground">Processing</span>
+                          <div className="flex gap-1">
+                            <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '0ms'}}></span>
+                            <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '150ms'}}></span>
+                            <span className="w-1 h-1 bg-primary rounded-full animate-bounce" style={{animationDelay: '300ms'}}></span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : renderAiResult(aiResult)}
+                </div>
               </div>
             </div>
           )}

@@ -414,7 +414,7 @@ export default function TicketsPage() {
                 totalStats.critical += filteredData.filter((c: any) => c.severity === "Critical").length
               }
             } else {
-              console.log(`Fetching Stellar Cyber cases from: ${integration.name}`)
+              console.log(`Fetching Stellar Cyber/SOCFortress cases from: ${integration.name}`)
               const params = new URLSearchParams({
                 integrationId: integration.id,
                 time_range: useAbsoluteDate ? "custom" : timeRange,
@@ -425,7 +425,7 @@ export default function TicketsPage() {
               })
               const response = await fetch(`/api/cases?${params}`)
               data = await response.json()
-              console.log(`Stellar Cyber response for ${integration.name}:`, data)
+              console.log(`Stellar Cyber/SOCFortress response for ${integration.name}:`, data)
 
               if (data.success) {
                 // Apply front-end filtering for status and severity as additional safety
@@ -437,15 +437,22 @@ export default function TicketsPage() {
                   filteredData = filteredData.filter((c: any) => c.severity === severityFilter)
                 }
                 
-                // Compute MTTR for QRadar and Stellar Cyber cases
+                // Compute MTTR for QRadar, Stellar Cyber, and SOCFortress cases
+                const isQRadar = integration.source === "qradar" || integration.name?.toLowerCase().includes("qradar")
+                const isStellarCyber = integration.source === "stellar-cyber" || integration.name?.toLowerCase().includes("stellar")
+                const isSocfortress = integration.source === "socfortress" || integration.source === "copilot" || integration.name?.toLowerCase().includes("socfortress")
+                
                 const casesWithMttr = filteredData.map((c: any) => {
                   let mttrMinutes = null
                   
-                  if (integration.source === "qradar" || integration.name?.toLowerCase().includes("qradar")) {
+                  if (isQRadar) {
                     mttrMinutes = computeQRadarMttrMinutes(c)
-                  } else if (integration.source === "stellar-cyber" || integration.name?.toLowerCase().includes("stellar")) {
+                  } else if (isStellarCyber) {
                     // For Stellar Cyber cases
                     mttrMinutes = computeStellarMttrMinutes(c)
+                  } else if (isSocfortress) {
+                    // For SOCFortress/Copilot cases, MTTR already calculated in API
+                    mttrMinutes = c.mttrMinutes || null
                   }
                   
                   if (mttrMinutes !== null && mttrMinutes !== undefined) {
@@ -478,16 +485,10 @@ export default function TicketsPage() {
         return
       }
 
-      console.log("Fetching cases with params:", {
-        integrationId: selectedIntegration,
-        time_range: timeRange,
-        status: statusFilter || undefined,
-        severity: severityFilter || undefined,
-      })
-
       // Check if selected integration is Wazuh
       const integration = integrations.find((i) => i.id === selectedIntegration)
       const isWazuh = integration?.source === "wazuh" || integration?.name?.toLowerCase().includes("wazuh")
+      const isSocfortress = integration?.source === "socfortress" || integration?.source === "copilot" || integration?.name?.toLowerCase().includes("socfortress")
 
       let response
       let data
@@ -552,6 +553,95 @@ export default function TicketsPage() {
           }
           setStats(stats)
           console.log("Fetched Wazuh cases:", data.cases.length)
+        }
+      } else if (isSocfortress) {
+        // Fetch from SOCFortress API
+        const params = new URLSearchParams({
+          integrationId: selectedIntegration,
+          ...(useAbsoluteDate && dateRange && { from_date: formatLocalDate(dateRange.from) }),
+          ...(useAbsoluteDate && dateRange && { to_date: formatLocalDate(dateRange.to) }),
+          ...(!useAbsoluteDate && { time_range: timeRange }),
+          ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
+          ...(severityFilter && severityFilter !== "all" && { severity: severityFilter }),
+        })
+
+        response = await fetch(`/api/cases?${params}`)
+        data = await response.json()
+        
+        console.log("[Tickets] API /api/cases response:", {
+          success: data.success,
+          caseCount: data.data?.length || 0,
+          firstCaseAlerts: data.data?.[0]?.alerts?.length || 0,
+          firstCaseMTTR: data.data?.[0]?.mttrMinutes,
+          allCasesAlerts: data.data?.map?.((c: any) => c.alerts?.length || 0) || []
+        })
+
+        if (data.success) {
+          // Transform SOCFortress cases to match Case interface
+          let mttrSum = 0
+          let mttrCount = 0
+          
+          const transformedCases = data.data.map((socfortressCase: any) => {
+            const mttrMinutes = socfortressCase.mttrMinutes || null
+            
+            if (mttrMinutes !== null && mttrMinutes !== undefined) {
+              mttrSum += mttrMinutes
+              mttrCount += 1
+            }
+            
+            console.log("[Tickets] Mapping case:", {
+              id: socfortressCase.id,
+              name: socfortressCase.name,
+              alerts: socfortressCase.alerts?.length || 0,
+              mttrMinutes,
+              alertSample: socfortressCase.alerts?.[0] ? { id: socfortressCase.alerts[0].id, title: socfortressCase.alerts[0].title } : null
+            })
+            return {
+            id: socfortressCase.id,
+            externalId: socfortressCase.externalId,
+            name: socfortressCase.name,
+            status: socfortressCase.status,
+            severity: socfortressCase.severity || "Low",
+            assignee: socfortressCase.assignee,
+            assigneeName: socfortressCase.assigneeName,
+            createdAt: new Date(socfortressCase.createdAt),
+            modifiedAt: socfortressCase.updatedAt ? new Date(socfortressCase.updatedAt) : null,
+            ticketId: socfortressCase.ticketId || 0,
+            score: null,
+            size: 0,
+            integration: {
+              id: selectedIntegration,
+              name: integration?.name || "SOCFortress",
+              source: "socfortress",
+            },
+            alerts: socfortressCase.alerts || [],
+            mttrMinutes,
+          }
+          })
+
+          console.log("[Tickets] Transformed SOCFortress cases:", {
+            count: transformedCases.length,
+            firstCaseAlerts: transformedCases[0]?.alerts?.length || 0,
+            mttrAvailable: mttrCount,
+          })
+
+          setCases(transformedCases)
+          setStats({
+            total: data.stats?.total ?? data.data.length,
+            open: data.stats?.open ?? transformedCases.filter((c: any) => c.status === "New").length,
+            inProgress: data.stats?.inProgress ?? transformedCases.filter((c: any) => c.status === "In Progress").length,
+            resolved: data.stats?.resolved ?? transformedCases.filter((c: any) => c.status === "Closed").length,
+            critical: data.stats?.critical ?? 0,
+            avgMttr: mttrCount > 0 ? Math.round(mttrSum / mttrCount) : 0,
+          })
+          console.log("Fetched SOCFortress cases:", data.data.length, "with MTTR:", mttrCount)
+        } else {
+          console.error("Failed to fetch SOCFortress cases:", data.error)
+          toast({
+            title: "Error",
+            description: data.error || "Failed to fetch SOCFortress cases",
+            variant: "destructive",
+          })
         }
       } else {
         // Fetch from Stellar Cyber API (original logic)

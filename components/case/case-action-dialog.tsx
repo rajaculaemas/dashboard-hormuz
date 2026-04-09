@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertTriangleIcon, UserIcon, SaveIcon, XIcon } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { SocfortressCaseUpdateDialog } from "@/components/case/socfortress-case-update-dialog"
 
 interface CaseActionDialogProps {
   open: boolean
@@ -289,6 +290,18 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
   }
 
   if (!caseData) return null
+
+  // For SOCFortress cases, use the specialized update dialog
+  if (caseData.integration?.source === "socfortress" || caseData.integration?.source === "copilot") {
+    return (
+      <SocfortressCaseUpdateDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        case={caseData}
+        onUpdateSuccess={onUpdate}
+      />
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { updateCaseInStellarCyber, getSingleCaseFromStellarCyber } from "@/lib/api/stellar-cyber-case"
+import { updateSocfortressCaseStatus, getSocfortressCases } from "@/lib/api/socfortress"
 import { getAssigneeName } from "@/lib/utils"
 import { getCurrentUser } from "@/lib/auth/session"
 import { hasPermission } from "@/lib/auth/password"
@@ -127,6 +128,65 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       }
     }
 
+    // If not found anywhere yet, try SOCFortress as last resort
+    // SOCFortress cases are stored in MySQL and fetched via getSocfortressCases
+    if (!caseDetail) {
+      console.log("Case not found in Prisma, trying SOCFortress...")
+      
+      // Try to find integrations with socfortress source
+      const integrations = await prisma.integration.findMany({
+        where: {
+          source: {
+            in: ["socfortress", "copilot"],
+          },
+        },
+      })
+      
+      // Try to find the case in each SOCFortress integration
+      for (const integration of integrations) {
+        try {
+          const result = await getSocfortressCases(integration.id, { limit: 500 })
+          const foundCase = result.cases.find(
+            (c: any) => c.externalId === id || String(c.ticketId) === id || String(c.id) === id
+          )
+          
+          if (foundCase) {
+            console.log(`Found SOCFortress case in integration ${integration.name}:`, foundCase.name)
+            caseDetail = {
+              id: foundCase.externalId,
+              externalId: foundCase.externalId,
+              ticketId: foundCase.ticketId,
+              name: foundCase.name,
+              description: foundCase.description,
+              status: foundCase.status,
+              severity: foundCase.severity,
+              assignee: foundCase.metadata?.socfortress?.assigned_to || null,
+              assigneeName: foundCase.metadata?.socfortress?.assigned_to || null,
+              createdAt: foundCase.timestamp,
+              updatedAt: foundCase.timestamp,
+              acknowledgedAt: null,
+              integrationId: foundCase.integrationId,
+              integration: {
+                id: foundCase.integrationId,
+                name: integration.name,
+                source: integration.source,
+              },
+              metadata: foundCase.metadata || {},
+              alerts: foundCase.alerts || [],
+              score: 0,
+              size: foundCase.alerts?.length || 0,
+              tags: [],
+              version: 1,
+            }
+            break
+          }
+        } catch (error) {
+          console.warn(`Error searching SOCFortress integration ${integration.name}:`, error)
+          continue
+        }
+      }
+    }
+
     if (!caseDetail) {
       return NextResponse.json({
         success: false,
@@ -228,6 +288,9 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       // Record timeline events for changes
       const timelineEvents = []
 
+      // Use consistent timestamp for all events in this case update
+      const eventTimestamp = new Date()
+
       // Status change
       if (wazuhStatus && wazuhStatus !== wazuhCase.status) {
         const statusMap: Record<string, string> = {
@@ -243,7 +306,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
           newValue: wazuhStatus,
           changedBy: assignee || "System",
           changedByUserId: assigneeId,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -257,7 +320,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
           newValue: severity,
           changedBy: assignee || "System",
           changedByUserId: assigneeId,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -273,7 +336,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
           newValue: assigneeId,
           changedBy: newAssignee,
           changedByUserId: assigneeId,
-          timestamp: new Date(),
+          timestamp: eventTimestamp,
         })
       }
 
@@ -292,6 +355,134 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({
         success: true,
         data: updatedWazuhCase,
+      })
+    }
+
+    // Check if it's a SOCFortress case update
+    if (integrationSource === "socfortress" || integrationSource === "copilot") {
+      let socfortressCase = await prisma.case.findUnique({
+        where: { id },
+        include: {
+          integration: true,
+        },
+      })
+
+      // If not found locally, search in SOCFortress MySQL
+      if (!socfortressCase) {
+        console.log("Case not found in local database, searching SOCFortress MySQL...")
+        
+        const integrations = await prisma.integration.findMany({
+          where: {
+            source: {
+              in: ["socfortress", "copilot"],
+            },
+          },
+        })
+        
+        for (const integration of integrations) {
+          try {
+            const result = await getSocfortressCases(integration.id, { limit: 500 })
+            const foundCase = result.cases.find(
+              (c: any) => c.externalId === id || String(c.ticketId) === id || String(c.id) === id
+            )
+            
+            if (foundCase) {
+              console.log(`Found SOCFortress case in integration ${integration.name}: ${foundCase.name}`)
+              socfortressCase = {
+                id: foundCase.externalId,
+                externalId: foundCase.externalId,
+                ticketId: foundCase.ticketId,
+                name: foundCase.name,
+                description: foundCase.description,
+                status: foundCase.status,
+                severity: foundCase.severity,
+                assignee: foundCase.metadata?.socfortress?.assigned_to || null,
+                integrationId: foundCase.integrationId,
+                integration: {
+                  id: foundCase.integrationId,
+                  name: integration.name,
+                  source: integration.source,
+                },
+                metadata: foundCase.metadata || {},
+              } as any
+              break
+            }
+          } catch (error) {
+            console.warn(`Error searching SOCFortress integration ${integration.name}:`, error)
+            continue
+          }
+        }
+      }
+
+      if (!socfortressCase) {
+        console.error("SOCFortress case not found:", id)
+        return NextResponse.json(
+          {
+            success: false,
+            error: "SOCFortress case not found",
+          },
+          { status: 404 },
+        )
+      }
+
+      // Update case in SOCFortress MySQL
+      try {
+        await updateSocfortressCaseStatus(
+          socfortressCase.integrationId,
+          socfortressCase.externalId || String(socfortressCase.ticketId),
+          status,
+          {
+            assignedTo: assignee,
+            comments: comment,
+            severity: severity,
+          },
+        )
+
+        console.log("Successfully updated case in SOCFortress")
+      } catch (error) {
+        console.error("Error updating case in SOCFortress:", error)
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Failed to update case in SOCFortress: " + (error instanceof Error ? error.message : String(error)),
+          },
+          { status: 500 },
+        )
+      }
+
+      // Try to update local cache if case exists
+      let updatedCase = null
+      try {
+        const existingCase = await prisma.case.findUnique({ where: { id } })
+        if (existingCase) {
+          updatedCase = await prisma.case.update({
+            where: { id },
+            data: {
+              status,
+              severity,
+              assignee,
+              modifiedAt: new Date(),
+            },
+            include: {
+              integration: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          })
+          console.log("SOCFortress case updated in local database:", updatedCase.name)
+        }
+      } catch (error) {
+        console.warn("Could not update case in local database:", error)
+      }
+
+      // Return the updated case data (prioritize local if available, otherwise return from SOCFortress)
+      const responseData = updatedCase || socfortressCase
+      return NextResponse.json({
+        success: true,
+        data: responseData,
       })
     }
 
@@ -374,6 +565,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       const stellarResult = await updateCaseInStellarCyber({
         caseId: updatedCase.externalId, // Use external ID for Stellar Cyber
         integrationId: updatedCase.integrationId,
+        userId: user.id,  // Pass user ID to use user's API key
         updates: {
           status,
           severity,
@@ -457,5 +649,177 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
       },
       { status: 500 },
     )
+  }
+}
+export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    // Check authentication and permission
+    const user = await getCurrentUser()
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+    
+    if (!hasPermission(user.role, 'update_case')) {
+      return NextResponse.json({ error: "Forbidden: You don't have permission to update cases" }, { status: 403 })
+    }
+    
+    const { id } = await params
+    const body = await request.json()
+    const { status, severity, assignedTo, comments } = body
+
+    if (!id || !status) {
+      return NextResponse.json({ error: "Missing required fields: id or status" }, { status: 400 })
+    }
+
+    // Validate status
+    const validStatuses = ["New", "In Progress", "Closed"]
+    if (!validStatuses.includes(status as string)) {
+      return NextResponse.json(
+        { error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` },
+        { status: 400 },
+      )
+    }
+
+    // Find case in database
+    const caseRecord = await prisma.case.findUnique({
+      where: { id },
+      include: {
+        integration: true,
+      },
+    })
+
+    if (!caseRecord) {
+      return NextResponse.json({ error: "Case not found" }, { status: 404 })
+    }
+
+    // Update case in Prisma
+    const metadata = (caseRecord.metadata as any) || {}
+    const updatedMetadata = {
+      ...metadata,
+      ...(assignedTo && { socfortress: { ...metadata.socfortress, assigned_to: assignedTo } }),
+      ...(comments && {
+        comment: [
+          {
+            comment_user: user.name || user.email || "system",
+            comment_time: new Date().toISOString(),
+            comment: comments,
+          },
+        ],
+      }),
+    }
+
+    const updatedCase = await prisma.case.update({
+      where: { id },
+      data: {
+        status,
+        ...(severity && { severity }),
+        modifiedAt: new Date(),
+        metadata: updatedMetadata,
+      },
+      include: {
+        integration: true,
+      },
+    })
+
+    console.log(`[PATCH /api/cases/[id]] Case ${id} updated: status=${status}, severity=${severity}`)
+
+    // Record timeline events
+    const timelineEvents: any[] = []
+
+    if (caseRecord.status !== status) {
+      timelineEvents.push({
+        caseId: id,
+        eventType: "status_change",
+        description: `Status changed from "${caseRecord.status}" to "${status}"`,
+        oldValue: caseRecord.status,
+        newValue: status,
+        changedBy: user.name || user.email || "System",
+        changedByUserId: user.id,
+        timestamp: new Date(),
+      })
+    }
+
+    if (severity && caseRecord.severity !== severity) {
+      timelineEvents.push({
+        caseId: id,
+        eventType: "severity_change",
+        description: `Severity changed from "${caseRecord.severity || "Not Set"}" to "${severity}"`,
+        oldValue: caseRecord.severity || "",
+        newValue: severity,
+        changedBy: user.name || user.email || "System",
+        changedByUserId: user.id,
+        timestamp: new Date(),
+      })
+    }
+
+    if (assignedTo) {
+      timelineEvents.push({
+        caseId: id,
+        eventType: "assignment_change",
+        description: `Assigned to ${assignedTo}`,
+        oldValue: caseRecord.metadata?.socfortress?.assigned_to || "unassigned",
+        newValue: assignedTo,
+        changedBy: user.name || user.email || "System",
+        changedByUserId: user.id,
+        timestamp: new Date(),
+      })
+    }
+
+    if (comments) {
+      timelineEvents.push({
+        caseId: id,
+        eventType: "comment",
+        description: comments,
+        changedBy: user.name || user.email || "System",
+        changedByUserId: user.id,
+        timestamp: new Date(),
+      })
+    }
+
+    if (timelineEvents.length > 0) {
+      await prisma.caseTimeline.createMany({ data: timelineEvents })
+    }
+
+    // If SOCFortress case, update in MySQL as well
+    if (caseRecord.integration?.source === "socfortress" || caseRecord.integration?.source === "copilot") {
+      try {
+        console.log(`[PATCH] Updating SOCFortress case ${caseRecord.externalId}...`)
+
+        // Map UI status to SOCFortress status format
+        const statusMap: Record<string, string> = {
+          "New": "OPEN",
+          "In Progress": "IN_PROGRESS",
+          "Closed": "CLOSED",
+        }
+
+        const socfortressStatus = statusMap[status as string] || (status as string)
+
+        // Update in SOCFortress MySQL
+        await updateSocfortressCaseStatus(
+          caseRecord.integrationId,
+          caseRecord.externalId,
+          socfortressStatus,
+          {
+            assignedTo,
+            comments,
+            severity,
+          }
+        )
+
+        console.log(`[PATCH] Updated SOCFortress case ${caseRecord.externalId} in MySQL`)
+      } catch (error) {
+        console.error("Error updating case status in SOCFortress:", error)
+        // Continue even if update in SOCFortress fails
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Case updated successfully",
+      data: updatedCase,
+    })
+  } catch (error) {
+    console.error("Error in PATCH /api/cases/[id]:", error)
+    return NextResponse.json({ error: "Failed to update case" }, { status: 500 })
   }
 }

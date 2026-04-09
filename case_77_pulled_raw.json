@@ -1,0 +1,410 @@
+{
+  "db": "copilot",
+  "generated_at": "2026-02-10T03:11:32Z",
+  "mode": "case_by_id",
+  "limits": {
+    "case_limit": 1,
+    "child_limit": 200,
+    "asset_limit": 200,
+    "asset_context_limit": 200
+  },
+  "count": 1,
+  "cases": [
+    {
+      "case_id": 77,
+      "case": {
+        "id": 77,
+        "case_name": "Successful SSH login outside business hours (23:0005:00 WIB) - DNS-BACKUP",
+        "case_description": "Successful SSH login outside business hours (23:0005:00 WIB)",
+        "case_creation_time": "2026-01-27 03:25:09",
+        "case_status": "CLOSED",
+        "assigned_to": "ambarfitri",
+        "customer_code": "posindonesia",
+        "notification_invoked_number": 0,
+        "severity": "Low"
+      },
+      "case_history": [
+        {
+          "id": 126,
+          "case_id": 77,
+          "change_type": "STATUS_CHANGE",
+          "field_name": "case_status",
+          "old_value": "OPEN",
+          "new_value": "CLOSED",
+          "changed_by": null,
+          "changed_at": "2026-02-02 04:14:35",
+          "description": "Bulk update: case_status changed from OPEN to CLOSED"
+        },
+        {
+          "id": 125,
+          "case_id": 77,
+          "change_type": "SEVERITY_CHANGE",
+          "field_name": "severity",
+          "old_value": null,
+          "new_value": "Low",
+          "changed_by": null,
+          "changed_at": "2026-01-29 03:44:30",
+          "description": "Severity changed from None to AlertSeverity.LOW"
+        }
+      ],
+      "case_alert_links": [
+        {
+          "case_id": 77,
+          "alert_id": 1275,
+          "selected_asset_ids": "[2482]"
+        },
+        {
+          "case_id": 77,
+          "alert_id": 1327,
+          "selected_asset_ids": "null"
+        }
+      ],
+      "alerts": [
+        {
+          "alert_id": 1275,
+          "root": {
+            "id": 1275,
+            "alert_name": "Successful SSH login outside business hours (23:00–05:00 WIB)",
+            "alert_description": "Successful SSH login outside business hours (23:00–05:00 WIB)",
+            "status": "CLOSED",
+            "alert_creation_time": "2026-01-26 20:05:04",
+            "customer_code": "posindonesia",
+            "time_closed": "2026-01-27 04:07:43",
+            "source": "wazuh",
+            "assigned_to": "ambarfitri",
+            "severity": "Low"
+          },
+          "children": {
+            "incident_management_alert_history": [
+              {
+                "id": 5485,
+                "alert_id": 1275,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "IN_PROGRESS",
+                "new_value": "CLOSED",
+                "changed_by": null,
+                "changed_at": "2026-01-27 04:07:43",
+                "description": "Status changed from IN_PROGRESS to AlertStatus.CLOSED"
+              },
+              {
+                "id": 5308,
+                "alert_id": 1275,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "OPEN",
+                "new_value": "IN_PROGRESS",
+                "changed_by": null,
+                "changed_at": "2026-01-26 20:25:14",
+                "description": "Status changed from OPEN to AlertStatus.IN_PROGRESS"
+              },
+              {
+                "id": 5307,
+                "alert_id": 1275,
+                "change_type": "SEVERITY_CHANGE",
+                "field_name": "severity",
+                "old_value": null,
+                "new_value": "Low",
+                "changed_by": null,
+                "changed_at": "2026-01-26 20:25:03",
+                "description": "Severity changed from None to AlertSeverity.LOW"
+              },
+              {
+                "id": 5306,
+                "alert_id": 1275,
+                "change_type": "ASSIGNMENT_CHANGE",
+                "field_name": "assigned_to",
+                "old_value": "(unassigned)",
+                "new_value": "ambarfitri",
+                "changed_by": null,
+                "changed_at": "2026-01-26 20:25:01",
+                "description": "Assignment changed from (unassigned) to ambarfitri"
+              },
+              {
+                "id": 5305,
+                "alert_id": 1275,
+                "change_type": "COMMENT_ADDED",
+                "field_name": "comments",
+                "old_value": null,
+                "new_value": "Terdapat aktivitas Successful SSH login outside business hours yang berasal dari IP 10.27.0.19 dengan username nocdns dan nocdns1 menuju IP 10.33.64.3 (DNS3), 10.33.41.101 (DNS-BACKUP), dan 10.33.41.1",
+                "changed_by": "ambarfitri",
+                "changed_at": "2026-01-26 20:24:54",
+                "description": "Comment added by ambarfitri"
+              }
+            ],
+            "incident_management_alertevent": [
+              {
+                "source_data": "{\"id\": \"1769457603.4509514357\", \"true\": 1769457603.274599, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769457603.274599,\\\"timestamp\\\":\\\"2026-01-26T20:00:03.270+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":3,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"096\\\",\\\"name\\\":\\\"DNS3\\\",\\\"ip\\\":\\\"10.33.64.3\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769457603.4509514357\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-27T03:00:02.127045+07:00 dns3drc sshd[342141]: Accepted publickey for nocdns from 10.27.0.19 port 40974 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-27T03:00:02.127045+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"40974\\\",\\\"dstuser\\\":\\\"nocdns\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"096\", \"agent_ip\": \"10.33.64.3\", \"full_log\": \"2026-01-27T03:00:02.127045+07:00 dns3drc sshd[342141]: Accepted publickey for nocdns from 10.27.0.19 port 40974 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-26 20:00:03.696\", \"agent_name\": \"DNS3\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns\", \"data_srcport\": \"40974\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:03.270Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KFXY8N3G006ATG9M0V5RMXVJ\", \"gl2_remote_port\": 45136, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 3, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <9a7d4a62-faf1-11f0-97c2-005056120016> with current time - Value <2026-01-26T20:00:03.270+0000> caused exception: Invalid format: \\\"2026-01-26T20:00:03.270+0000\\\" is malformed at \\\"T20:00:03.270+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-26T20:00:03.445Z\", \"predecoder_timestamp\": \"2026-01-27T03:00:02.127045+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2499}",
+                "id": 493360,
+                "alert_id": 1275,
+                "asset_name": "DNS3",
+                "created_at": "2026-01-26 20:05:04"
+              },
+              {
+                "source_data": "{\"id\": \"1769457603.4509493350\", \"true\": 1769457603.059428, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769457603.059428,\\\"timestamp\\\":\\\"2026-01-26T20:00:03.058+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":2,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"095\\\",\\\"name\\\":\\\"DNS1\\\",\\\"ip\\\":\\\"10.33.41.104\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769457603.4509493350\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-27T03:02:56.301078+07:00 nocdns sshd[3624037]: Accepted publickey for nocdns from 10.27.0.19 port 32804 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-27T03:02:56.301078+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"32804\\\",\\\"dstuser\\\":\\\"nocdns\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"095\", \"agent_ip\": \"10.33.41.104\", \"full_log\": \"2026-01-27T03:02:56.301078+07:00 nocdns sshd[3624037]: Accepted publickey for nocdns from 10.27.0.19 port 32804 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-26 20:00:03.696\", \"agent_name\": \"DNS1\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns\", \"data_srcport\": \"32804\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:03.058Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KFXY8N3G006ARSNJGKFHP61F\", \"gl2_remote_port\": 45136, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 2, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <9a7c5ff5-faf1-11f0-97c2-005056120016> with current time - Value <2026-01-26T20:00:03.058+0000> caused exception: Invalid format: \\\"2026-01-26T20:00:03.058+0000\\\" is malformed at \\\"T20:00:03.058+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-26T20:00:03.439Z\", \"predecoder_timestamp\": \"2026-01-27T03:02:56.301078+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2503}",
+                "id": 493361,
+                "alert_id": 1275,
+                "asset_name": "DNS1",
+                "created_at": "2026-01-26 20:05:04"
+              },
+              {
+                "source_data": "{\"id\": \"1769457602.4509468171\", \"true\": 1769457602.809199, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769457602.809199,\\\"timestamp\\\":\\\"2026-01-26T20:00:02.799+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":1,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"097\\\",\\\"name\\\":\\\"DNS-BACKUP\\\",\\\"ip\\\":\\\"10.33.41.101\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769457602.4509468171\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-27T03:03:08.893290+07:00 nocdns1 sshd[663216]: Accepted publickey for nocdns1 from 10.27.0.19 port 42724 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-27T03:03:08.893290+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"42724\\\",\\\"dstuser\\\":\\\"nocdns1\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"097\", \"agent_ip\": \"10.33.41.101\", \"full_log\": \"2026-01-27T03:03:08.893290+07:00 nocdns1 sshd[663216]: Accepted publickey for nocdns1 from 10.27.0.19 port 42724 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-26 20:00:03.696\", \"agent_name\": \"DNS-BACKUP\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns1\", \"data_srcport\": \"42724\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:02.799Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KFXY8N3G006APP70ECM91GG9\", \"gl2_remote_port\": 45136, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 1, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <9a7b2795-faf1-11f0-97c2-005056120016> with current time - Value <2026-01-26T20:00:02.799+0000> caused exception: Invalid format: \\\"2026-01-26T20:00:02.799+0000\\\" is malformed at \\\"T20:00:02.799+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-26T20:00:03.432Z\", \"predecoder_timestamp\": \"2026-01-27T03:03:08.893290+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2519}",
+                "id": 493362,
+                "alert_id": 1275,
+                "asset_name": "DNS-BACKUP",
+                "created_at": "2026-01-26 20:05:04"
+              }
+            ],
+            "incident_management_comment": [
+              {
+                "id": 905,
+                "alert_id": 1275,
+                "comment": "Terdapat aktivitas Successful SSH login outside business hours yang berasal dari IP 10.27.0.19 dengan username nocdns dan nocdns1 menuju IP 10.33.64.3 (DNS3), 10.33.41.101 (DNS-BACKUP), dan 10.33.41.104 (DNS1)",
+                "user_name": "ambarfitri",
+                "created_at": "2026-01-26 20:24:54"
+              }
+            ],
+            "tags": {
+              "mapping": [
+                {
+                  "alert_id": 1275,
+                  "tag_id": 220
+                }
+              ],
+              "tags": [
+                {
+                  "id": 220,
+                  "tag": "True Positive"
+                }
+              ]
+            },
+            "iocs": {
+              "mapping": [],
+              "iocs": []
+            }
+          },
+          "assets": [
+            {
+              "id": 2482,
+              "alert_linked": 1275,
+              "asset_name": "DNS-BACKUP",
+              "alert_context_id": 2482,
+              "agent_id": "097",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_59",
+              "index_id": "9a7b2795-faf1-11f0-97c2-005056120016"
+            },
+            {
+              "id": 2481,
+              "alert_linked": 1275,
+              "asset_name": "DNS1",
+              "alert_context_id": 2481,
+              "agent_id": "095",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_59",
+              "index_id": "9a7c5ff5-faf1-11f0-97c2-005056120016"
+            },
+            {
+              "id": 2480,
+              "alert_linked": 1275,
+              "asset_name": "DNS3",
+              "alert_context_id": 2480,
+              "agent_id": "096",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_59",
+              "index_id": "9a7d4a62-faf1-11f0-97c2-005056120016"
+            }
+          ],
+          "asset_contexts": [
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:03.270Z\", \"rule_firedtimes\": 3, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2480,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:03.058Z\", \"rule_firedtimes\": 2, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2481,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-26T20:00:02.799Z\", \"rule_firedtimes\": 1, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2482,
+              "source": "wazuh"
+            }
+          ],
+          "notes": []
+        },
+        {
+          "alert_id": 1327,
+          "root": {
+            "id": 1327,
+            "alert_name": "Successful SSH login outside business hours (23:00–05:00 WIB)",
+            "alert_description": "Successful SSH login outside business hours (23:00–05:00 WIB)",
+            "status": "CLOSED",
+            "alert_creation_time": "2026-01-27 20:05:02",
+            "customer_code": "posindonesia",
+            "time_closed": "2026-01-27 20:17:14",
+            "source": "wazuh",
+            "assigned_to": "ambarfitri",
+            "severity": "Low"
+          },
+          "children": {
+            "incident_management_alert_history": [
+              {
+                "id": 5563,
+                "alert_id": 1327,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "IN_PROGRESS",
+                "new_value": "CLOSED",
+                "changed_by": null,
+                "changed_at": "2026-01-27 20:17:14",
+                "description": "Status changed from IN_PROGRESS to AlertStatus.CLOSED"
+              },
+              {
+                "id": 5562,
+                "alert_id": 1327,
+                "change_type": "COMMENT_ADDED",
+                "field_name": "comments",
+                "old_value": null,
+                "new_value": "Related case 260120260001",
+                "changed_by": "ambarfitri",
+                "changed_at": "2026-01-27 20:17:09",
+                "description": "Comment added by ambarfitri"
+              },
+              {
+                "id": 5561,
+                "alert_id": 1327,
+                "change_type": "STATUS_CHANGE",
+                "field_name": "status",
+                "old_value": "OPEN",
+                "new_value": "IN_PROGRESS",
+                "changed_by": null,
+                "changed_at": "2026-01-27 20:15:16",
+                "description": "Status changed from OPEN to AlertStatus.IN_PROGRESS"
+              },
+              {
+                "id": 5560,
+                "alert_id": 1327,
+                "change_type": "SEVERITY_CHANGE",
+                "field_name": "severity",
+                "old_value": null,
+                "new_value": "Low",
+                "changed_by": null,
+                "changed_at": "2026-01-27 20:15:14",
+                "description": "Severity changed from None to AlertSeverity.LOW"
+              },
+              {
+                "id": 5559,
+                "alert_id": 1327,
+                "change_type": "ASSIGNMENT_CHANGE",
+                "field_name": "assigned_to",
+                "old_value": "(unassigned)",
+                "new_value": "ambarfitri",
+                "changed_by": null,
+                "changed_at": "2026-01-27 20:15:11",
+                "description": "Assignment changed from (unassigned) to ambarfitri"
+              }
+            ],
+            "incident_management_alertevent": [
+              {
+                "source_data": "{\"id\": \"1769544002.4572705800\", \"true\": 1769544002.302885, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769544002.302885,\\\"timestamp\\\":\\\"2026-01-27T20:00:02.282+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":1,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"095\\\",\\\"name\\\":\\\"DNS1\\\",\\\"ip\\\":\\\"10.33.41.104\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769544002.4572705800\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-28T03:02:56.966861+07:00 nocdns sshd[3766509]: Accepted publickey for nocdns from 10.27.0.19 port 49218 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-28T03:02:56.966861+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"49218\\\",\\\"dstuser\\\":\\\"nocdns\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"095\", \"agent_ip\": \"10.33.41.104\", \"full_log\": \"2026-01-28T03:02:56.966861+07:00 nocdns sshd[3766509]: Accepted publickey for nocdns from 10.27.0.19 port 49218 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-27 20:00:08.292\", \"agent_name\": \"DNS1\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns\", \"data_srcport\": \"49218\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:02.282Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KG0GNGK4008FS0BZ1BA40ZW7\", \"gl2_remote_port\": 48968, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 1, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <c66daa51-fbba-11f0-bdf5-005056120016> with current time - Value <2026-01-27T20:00:02.282+0000> caused exception: Invalid format: \\\"2026-01-27T20:00:02.282+0000\\\" is malformed at \\\"T20:00:02.282+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-27T20:00:06.006Z\", \"predecoder_timestamp\": \"2026-01-28T03:02:56.966861+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2503}",
+                "id": 494993,
+                "alert_id": 1327,
+                "asset_name": "DNS1",
+                "created_at": "2026-01-27 20:05:03"
+              },
+              {
+                "source_data": "{\"id\": \"1769544002.4572710834\", \"true\": 1769544002.836237, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769544002.836237,\\\"timestamp\\\":\\\"2026-01-27T20:00:02.825+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":2,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"118\\\",\\\"name\\\":\\\"DNS2\\\",\\\"ip\\\":\\\"10.33.41.168\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769544002.4572710834\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-28T03:00:03.195567+07:00 nocdns sshd[2648994]: Accepted publickey for nocdns from 10.27.0.19 port 47494 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-28T03:00:03.195567+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"47494\\\",\\\"dstuser\\\":\\\"nocdns\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"118\", \"agent_ip\": \"10.33.41.168\", \"full_log\": \"2026-01-28T03:00:03.195567+07:00 nocdns sshd[2648994]: Accepted publickey for nocdns from 10.27.0.19 port 47494 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-27 20:00:08.292\", \"agent_name\": \"DNS2\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns\", \"data_srcport\": \"47494\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:02.825Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KG0GNGK4008FSD921HRX0AP1\", \"gl2_remote_port\": 48968, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 2, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <c685ed43-fbba-11f0-bdf5-005056120016> with current time - Value <2026-01-27T20:00:02.825+0000> caused exception: Invalid format: \\\"2026-01-27T20:00:02.825+0000\\\" is malformed at \\\"T20:00:02.825+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-27T20:00:06.165Z\", \"predecoder_timestamp\": \"2026-01-28T03:00:03.195567+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2503}",
+                "id": 494991,
+                "alert_id": 1327,
+                "asset_name": "DNS2",
+                "created_at": "2026-01-27 20:05:02"
+              },
+              {
+                "source_data": "{\"id\": \"1769544003.4572723257\", \"true\": 1769544003.014261, \"source\": \"100.100.12.31\", \"message\": \"{\\\"true\\\":1769544003.014261,\\\"timestamp\\\":\\\"2026-01-27T20:00:03.013+0000\\\",\\\"rule\\\":{\\\"level\\\":12,\\\"description\\\":\\\"     Successful SSH login outside business hours (23:00–05:00 WIB)\\\\n  \\\",\\\"id\\\":\\\"960301\\\",\\\"mitre\\\":{\\\"id\\\":[\\\"T1078\\\"],\\\"tactic\\\":[\\\"Defense Evasion\\\",\\\"Persistence\\\",\\\"Privilege Escalation\\\",\\\"Initial Access\\\"],\\\"technique\\\":[\\\"Valid Accounts\\\"]},\\\"firedtimes\\\":3,\\\"mail\\\":true,\\\"groups\\\":[\\\"local\\\",\\\"syslog\\\",\\\"sshdlinux\\\",\\\"ueba\\\",\\\"authentication\\\",\\\"after_hours\\\",\\\"monitoring\\\"]},\\\"agent\\\":{\\\"id\\\":\\\"096\\\",\\\"name\\\":\\\"DNS3\\\",\\\"ip\\\":\\\"10.33.64.3\\\",\\\"labels\\\":{\\\"customer\\\":\\\"posindonesia\\\"}},\\\"manager\\\":{\\\"name\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"id\\\":\\\"1769544003.4572723257\\\",\\\"cluster\\\":{\\\"name\\\":\\\"dc01-cakra-wdpmc.pss.net\\\",\\\"node\\\":\\\"wazuh.worker.POS_Indonesia\\\"},\\\"full_log\\\":\\\"2026-01-28T03:00:02.088048+07:00 dns3drc sshd[450922]: Accepted publickey for nocdns from 10.27.0.19 port 55484 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\\\",\\\"predecoder\\\":{\\\"program_name\\\":\\\"sshd\\\",\\\"timestamp\\\":\\\"2026-01-28T03:00:02.088048+07:00\\\"},\\\"decoder\\\":{\\\"parent\\\":\\\"sshd\\\",\\\"name\\\":\\\"sshd\\\"},\\\"data\\\":{\\\"srcip\\\":\\\"10.27.0.19\\\",\\\"srcport\\\":\\\"55484\\\",\\\"dstuser\\\":\\\"nocdns\\\"},\\\"location\\\":\\\"/var/log/auth.log\\\"}\", \"rule_id\": \"960301\", \"streams\": [\"69293716f2ef3b64a9bc1791\"], \"agent_id\": \"096\", \"agent_ip\": \"10.33.64.3\", \"full_log\": \"2026-01-28T03:00:02.088048+07:00 dns3drc sshd[450922]: Accepted publickey for nocdns from 10.27.0.19 port 55484 ssh2: RSA SHA256:CJKI7emyp5OsK3H1olLODD16c3wUa7rtw/ZiEDfCT0c\", \"location\": \"/var/log/auth.log\", \"rule_mail\": true, \"timestamp\": \"2026-01-27 20:00:08.292\", \"agent_name\": \"DNS3\", \"data_srcip\": \"10.27.0.19\", \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"syslog_type\": \"wazuh\", \"cakra_src_ip\": \"10.27.0.19\", \"cluster_name\": \"dc01-cakra-wdpmc.pss.net\", \"cluster_node\": \"wazuh.worker.POS_Indonesia\", \"data_dstuser\": \"nocdns\", \"data_srcport\": \"55484\", \"decoder_name\": \"sshd\", \"manager_name\": \"wazuh.worker.POS_Indonesia\", \"syslog_level\": \"ALERT\", \"gl2_remote_ip\": \"100.100.12.31\", \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:03.013Z\", \"decoder_parent\": \"sshd\", \"gl2_message_id\": \"01KG0GNGK4008FSXRY5TWW1GRP\", \"gl2_remote_port\": 48968, \"gl2_source_node\": \"317aa991-9004-48c2-9593-5e90f2079e22\", \"rule_firedtimes\": 3, \"gl2_source_input\": \"6658d436fb7abf31abd4cfe3\", \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"syslog_categories\": [\"local\", \"syslog\", \"sshdlinux\", \"ueba\", \"authentication\", \"after_hours\", \"monitoring\"], \"source_reserved_ip\": true, \"syslog_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"agent_ip_reserved_ip\": true, \"gl2_processing_error\": \"Replaced invalid timestamp value in message <c6949341-fbba-11f0-bdf5-005056120016> with current time - Value <2026-01-27T20:00:03.013+0000> caused exception: Invalid format: \\\"2026-01-27T20:00:03.013+0000\\\" is malformed at \\\"T20:00:03.013+0000\\\".\", \"ingest_timestamp_utc\": \"2026-01-27T20:00:06.260Z\", \"predecoder_timestamp\": \"2026-01-28T03:00:02.088048+07:00\", \"rule_mitre_technique\": \"Valid Accounts\", \"agent_labels_customer\": \"posindonesia\", \"data_srcip_reserved_ip\": true, \"predecoder_program_name\": \"sshd\", \"cakra_src_ip_reserved_ip\": true, \"gl2_accounted_message_size\": 2499}",
+                "id": 494992,
+                "alert_id": 1327,
+                "asset_name": "DNS3",
+                "created_at": "2026-01-27 20:05:02"
+              }
+            ],
+            "incident_management_comment": [
+              {
+                "id": 956,
+                "alert_id": 1327,
+                "comment": "Related case 260120260001",
+                "user_name": "ambarfitri",
+                "created_at": "2026-01-27 20:17:08"
+              }
+            ],
+            "tags": {
+              "mapping": [],
+              "tags": []
+            },
+            "iocs": {
+              "mapping": [],
+              "iocs": []
+            }
+          },
+          "assets": [
+            {
+              "id": 2556,
+              "alert_linked": 1327,
+              "asset_name": "DNS1",
+              "alert_context_id": 2556,
+              "agent_id": "095",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_60",
+              "index_id": "c66daa51-fbba-11f0-bdf5-005056120016"
+            },
+            {
+              "id": 2555,
+              "alert_linked": 1327,
+              "asset_name": "DNS3",
+              "alert_context_id": 2555,
+              "agent_id": "096",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_60",
+              "index_id": "c6949341-fbba-11f0-bdf5-005056120016"
+            },
+            {
+              "id": 2554,
+              "alert_linked": 1327,
+              "asset_name": "DNS2",
+              "alert_context_id": 2554,
+              "agent_id": "118",
+              "velociraptor_id": null,
+              "customer_code": "posindonesia",
+              "index_name": "wazuh-posindonesia_60",
+              "index_id": "c685ed43-fbba-11f0-bdf5-005056120016"
+            }
+          ],
+          "asset_contexts": [
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:02.825Z\", \"rule_firedtimes\": 2, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2554,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:03.013Z\", \"rule_firedtimes\": 3, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2555,
+              "source": "wazuh"
+            },
+            {
+              "context": "{\"rule_id\": \"960301\", \"rule_mail\": true, \"rule_level\": 12, \"rule_group1\": \"local\", \"rule_group2\": \"syslog\", \"rule_group3\": \"sshdlinux\", \"rule_groups\": \"local, syslog, sshdlinux, ueba, authentication, after_hours, monitoring\", \"process_name\": [], \"rule_mitre_id\": \"T1078\", \"timestamp_utc\": \"2026-01-27T20:00:02.282Z\", \"rule_firedtimes\": 1, \"rule_description\": \"Successful SSH login outside business hours (23:00–05:00 WIB)\", \"rule_mitre_tactic\": \"Defense Evasion, Persistence, Privilege Escalation, Initial Access\", \"rule_mitre_technique\": \"Valid Accounts\"}",
+              "id": 2556,
+              "source": "wazuh"
+            }
+          ],
+          "notes": []
+        }
+      ]
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
 import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-dialog"
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { CaseDetailDialog } from "@/components/case/case-detail-dialog"
+import { SocfortressCaseUpdateDialog } from "@/components/case/socfortress-case-update-dialog"
 import { AlertColumnSelector, type AlertColumn } from "@/components/alert/alert-column-selector"
 
 interface Integration {
@@ -126,6 +127,20 @@ function computeMTTD(alert: AlertItem, source: string): number | null {
 
   const sourceNormalized = source?.toLowerCase().replace(/_/g, "-") || ""
 
+  // Socfortress/Copilot: use pre-calculated socfortress_alert_to_first
+  if (sourceNormalized.includes("socfortress") || sourceNormalized.includes("copilot")) {
+    const metadata = alert.metadata as any
+    const socfortressMttdMs = metadata?.socfortress_alert_to_first
+    
+    if (socfortressMttdMs !== null && socfortressMttdMs !== undefined && socfortressMttdMs > 0) {
+      // socfortress_alert_to_first is already in milliseconds
+      return formatMetric(socfortressMttdMs)
+    }
+    
+    // No MTTD data available for this Socfortress alert
+    return null
+  }
+
   // Stellar Cyber: calculate from "Event assignee changed to" action timestamp
   if (sourceNormalized.includes("stellar")) {
     const metadata = alert.metadata as any
@@ -164,32 +179,7 @@ function computeMTTD(alert: AlertItem, source: string): number | null {
       }
     }
     
-    // Fallback 1: If alert is closed/resolved, use updatedAt as detection time
-      if ((alert.status?.toLowerCase() === "closed" || alert.status?.toLowerCase() === "resolved") && alert.updatedAt && alertTime) {
-        let updatedAtMs: number
-        if (typeof alert.updatedAt === 'number') {
-          updatedAtMs = alert.updatedAt > 1000000000000 ? alert.updatedAt : alert.updatedAt * 1000
-        } else {
-          updatedAtMs = new Date(String(alert.updatedAt)).getTime()
-        }
-        const mttdMs = computeMetricMs(alertTime, updatedAtMs)
-        return formatMetric(mttdMs)
-    }
-    
-    // Fallback 2: Check for any action in history and use the earliest one
-    if (userAction?.history && Array.isArray(userAction.history) && userAction.history.length > 0) {
-      const firstAction = userAction.history.find((h: any) => h.action_time)
-      if (firstAction?.action_time) {
-        const actionTime = typeof firstAction.action_time === "number"
-          ? firstAction.action_time
-          : new Date(firstAction.action_time).getTime()
-        
-        const mttdMs = computeMetricMs(alertTime, actionTime)
-        return formatMetric(mttdMs)
-      }
-    }
-    
-    // Fallback 3: If alert has closed_time in metadata, use that
+    // Fallback 1: If alert has closed_time in metadata, prefer that (usually closest to actual detection/close)
     const closedTime = metadata?.closed_time
     if (closedTime && alertTime) {
       let closedTimeMs: number
@@ -200,9 +190,33 @@ function computeMTTD(alert: AlertItem, source: string): number | null {
       } else {
         closedTimeMs = 0
       }
-      
       if (closedTimeMs > alertTime) {
         const mttdMs = computeMetricMs(alertTime, closedTimeMs)
+        return formatMetric(mttdMs)
+      }
+    }
+
+    // Fallback 2: If alert is closed/resolved, use updatedAt as detection time (less preferred)
+    if ((alert.status?.toLowerCase() === "closed" || alert.status?.toLowerCase() === "resolved") && alert.updatedAt && alertTime) {
+      let updatedAtMs: number
+      if (typeof alert.updatedAt === 'number') {
+        updatedAtMs = alert.updatedAt > 1000000000000 ? alert.updatedAt : alert.updatedAt * 1000
+      } else {
+        updatedAtMs = new Date(String(alert.updatedAt)).getTime()
+      }
+      const mttdMs = computeMetricMs(alertTime, updatedAtMs)
+      return formatMetric(mttdMs)
+    }
+
+    // Fallback 3: Check for any action in history and use the earliest one
+    if (userAction?.history && Array.isArray(userAction.history) && userAction.history.length > 0) {
+      const firstAction = userAction.history.find((h: any) => h.action_time)
+      if (firstAction?.action_time) {
+        const actionTime = typeof firstAction.action_time === "number"
+          ? firstAction.action_time
+          : new Date(firstAction.action_time).getTime()
+
+        const mttdMs = computeMetricMs(alertTime, actionTime)
         return formatMetric(mttdMs)
       }
     }
@@ -249,9 +263,11 @@ function computeMTTR(caseItem: CaseItem): number | null {
 
     if (alertTimestamps.length > 0) {
       const firstAlertTs = Math.min(...alertTimestamps)
-      
-      // Resolution time is when case was updated/modified/resolved
-      const endTs = caseItem.modifiedAt || caseItem.createdAt
+
+      // Resolution time preference: prefer explicit closed/resolved/acknowledged timestamps,
+      // then fallback to modifiedAt, then createdAt. Using modifiedAt previously caused
+      // inflated MTTR when cases were edited long after resolution.
+      const endTs = (caseItem as any).closedAt || (caseItem as any).acknowledgedAt || caseItem.modifiedAt || caseItem.createdAt
       if (endTs) {
         return diffMinutes(firstAlertTs, endTs)
       }
@@ -350,6 +366,7 @@ export default function SlaDashboardPage() {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false)
   const [selectedCase, setSelectedCase] = useState<any | null>(null)
   const [caseDialogOpen, setCaseDialogOpen] = useState(false)
+  const [caseUpdateDialogOpen, setCaseUpdateDialogOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   // Fetch integrations
@@ -406,7 +423,39 @@ export default function SlaDashboardPage() {
         const resCases = await fetch(`/api/cases?${paramsStr}`)
         const dataCases = await resCases.json()
         const casesData = dataCases.data || dataCases.cases || []
-        console.log('[SLA] Fetched tickets:', casesData.length, 'Sample:', casesData[0])
+        console.log('[SLA] Fetched tickets:', casesData.length)
+        console.log('[SLA] Raw API response structure:', {
+          hasData: !!dataCases.data,
+          dataIsArray: Array.isArray(dataCases.data),
+          dataLength: dataCases.data?.length,
+          hasCases: !!dataCases.cases,
+          firstCaseKeys: casesData.length > 0 ? Object.keys(casesData[0]) : [],
+          firstCaseHasMetadata: casesData.length > 0 ? !!casesData[0].metadata : 'N/A'
+        })
+        
+        if (casesData.length > 0) {
+          console.log('[SLA] First case metadata:', casesData[0].metadata)
+          console.log('[SLA] First case has metadata keys:', Object.keys(casesData[0].metadata || {}).join(", "))
+          console.log('[SLA] First case all field names:', Object.keys(casesData[0]))
+          
+          // Log FULL case 77 if it exists
+          const case77 = casesData.find((c: any) => c.id === '77' || c.id === 77)
+          if (case77) {
+            console.log('[SLA] Case 77 found in API response')
+            console.log('[SLA] Case 77 all keys:', Object.keys(case77))
+            console.log('[SLA] Case 77 metadata field:', case77.metadata)
+            console.log('[SLA] Case 77 metadata type:', typeof case77.metadata)
+            console.log('[SLA] Case 77 metadata === undefined:', case77.metadata === undefined)
+            console.log('[SLA] Case 77 metadata === null:', case77.metadata === null)
+            if (case77.metadata) {
+              console.log('[SLA] Case 77 metadata keys:', Object.keys(case77.metadata))
+              console.log('[SLA] Case 77 case_history:', case77.metadata?.case_history?.length || 0, 'entries')
+            }
+          } else {
+            console.log('[SLA] Case 77 NOT found in casesData')
+            console.log('[SLA] Available case IDs:', casesData.slice(0, 5).map((c: any) => c.id).join(", "))
+          }
+        }
         setCases(casesData)
       } else {
         setCases([])
@@ -1131,7 +1180,10 @@ export default function SlaDashboardPage() {
       {selectedAlert && (
         <>
           {(() => {
-            const isWazuh = String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("wazuh")
+            const source = String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase()
+            const isWazuh = source.includes("wazuh")
+            const isQRadar = source.includes("qradar")
+            
             const enriched = selectedAlert
               ? ({
                   ...selectedAlert,
@@ -1147,13 +1199,27 @@ export default function SlaDashboardPage() {
               : selectedAlert
 
             if (isWazuh) return <WazuhAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={enriched} />
-            if (String((selectedAlert.integration?.source || selectedAlert.metadata?.source || "")).toLowerCase().includes("qradar")) return <QRadarAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
+            if (isQRadar) return <QRadarAlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
             return <AlertDetailDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen} alert={selectedAlert} />
           })()}
         </>
       )}
       {selectedCase && (
-        <CaseDetailDialog open={caseDialogOpen} onOpenChange={setCaseDialogOpen} case={selectedCase} />
+        <>
+          <CaseDetailDialog open={caseDialogOpen} onOpenChange={setCaseDialogOpen} case={selectedCase} />
+          {(selectedCase.metadata?.socfortress || selectedCase.integration?.source === "socfortress" || selectedCase.integration?.source === "copilot") && (
+            <SocfortressCaseUpdateDialog
+              open={caseUpdateDialogOpen}
+              onOpenChange={setCaseUpdateDialogOpen}
+              caseData={selectedCase}
+              onUpdateSuccess={async () => {
+                setCaseUpdateDialogOpen(false)
+                // Refresh the SLA data after successful update
+                fetchData()
+              }}
+            />
+          )}
+        </>
       )}
     </div>
   )
