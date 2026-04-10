@@ -13,7 +13,7 @@ Edit `.env.local` file:
 ```bash
 # Find this section (around line 25-27):
 # Telegram Bot Configuration (Phase 3)
-TELEGRAM_BOT_TOKEN=7873272862:AAGsY9LgB5dJGzKbnWrgrM4UIJ49o2bCYsI
+TELEGRAM_BOT_TOKEN=<get_new_token_from_BotFather>
 TELEGRAM_WEBHOOK_SECRET=escalation_webhook_secret_soc_dashboard_2026
 TELEGRAM_WEBHOOK_URL=https://your-domain.com/api/telegram/webhook
 
@@ -79,7 +79,7 @@ npm run build && npm start
    # Send bot any message (e.g., "hi")
    
    # In terminal, check updates:
-   curl 'https://api.telegram.org/bot7873272862:AAGsY9LgB5dJGzKbnWrgrM4UIJ49o2bCYsI/getUpdates'
+   curl 'https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates'
    
    # Look for the "id" field in response:
    # "chat":{"id":YOUR_CHAT_ID,...}
@@ -231,7 +231,7 @@ curl -X POST http://localhost:3000/api/admin/telegram/setup \
   -d '{"action":"status"}'
 
 # Get Telegram updates (to find chat ID)
-curl 'https://api.telegram.org/bot7873272862:AAGsY9LgB5dJGzKbnWrgrM4UIJ49o2bCYsI/getUpdates'
+curl 'https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates'
 
 # Send test message manually
 curl -X POST http://localhost:3000/api/admin/telegram/setup \

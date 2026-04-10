@@ -10,7 +10,7 @@
 
 ### 1. Telegram Bot Token Configured ✅
 ```
-Token: 7873272862:AAGsY9LgB5dJGzKbnWrgrM4UIJ49o2bCYsI
+Token: <get new token from BotFather>
 Secret: escalation_webhook_secret_soc_dashboard_2026
 Status: Stored in .env.local
 ```
