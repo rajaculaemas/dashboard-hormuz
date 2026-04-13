@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -25,10 +25,45 @@ export function CreateCaseDialog({ open, onOpenChange, selectedAlerts, onSuccess
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [stellarUsers, setStellarUsers] = useState<any[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
 
   // Get unique customer codes from selected alerts
   const customerCodes = [...new Set(selectedAlerts.map((a: any) => a.metadata?.customer_code || a.customer_code))]
   const customerCode = customerCodes.length === 1 ? customerCodes[0] : ""
+
+  // Detect if alerts are from Stellar Cyber
+  const isStellarCyber = selectedAlerts.some((a: any) => a.source === "stellar_cyber" || a.metadata?.stellar_cyber)
+  const integrationId = selectedAlerts[0]?.integrationId || selectedAlerts[0]?.metadata?.integrationId
+
+  // Fetch Stellar Cyber users when dialog opens and alerts are from Stellar
+  useEffect(() => {
+    if (open && isStellarCyber && integrationId) {
+      console.log("[Create Case] Fetching Stellar Cyber users...")
+      fetchStellarUsers()
+    }
+  }, [open, isStellarCyber, integrationId])
+
+  const fetchStellarUsers = async () => {
+    try {
+      setLoadingUsers(true)
+      const response = await fetch(`/api/stellar-cyber/users?integrationId=${integrationId}`)
+      const data = await response.json()
+      
+      if (data.success) {
+        console.log(`[Create Case] Fetched ${data.count} Stellar users`)
+        setStellarUsers(data.users || [])
+      } else {
+        console.error("[Create Case] Failed to fetch users:", data.error)
+        setStellarUsers([])
+      }
+    } catch (error) {
+      console.error("[Create Case] Error fetching Stellar users:", error)
+      setStellarUsers([])
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -176,17 +211,29 @@ export function CreateCaseDialog({ open, onOpenChange, selectedAlerts, onSuccess
           {/* Assign To */}
           <div className="space-y-2">
             <Label htmlFor="assign-to">Assign To</Label>
-            <Select value={assignedTo} onValueChange={setAssignedTo} disabled={isLoading}>
+            <Select value={assignedTo} onValueChange={setAssignedTo} disabled={isLoading || loadingUsers}>
               <SelectTrigger id="assign-to">
-                <SelectValue />
+                <SelectValue placeholder={loadingUsers ? "Loading users..." : "Select user (optional)"} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="unassigned">Unassigned</SelectItem>
-                {SOCFORTRESS_USERS.map((user) => (
-                  <SelectItem key={user.id} value={user.username}>
-                    {user.username}
-                  </SelectItem>
-                ))}
+                {isStellarCyber && stellarUsers.length > 0 ? (
+                  stellarUsers.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.name}
+                    </SelectItem>
+                  ))
+                ) : !isStellarCyber ? (
+                  SOCFORTRESS_USERS.map((user) => (
+                    <SelectItem key={user.id} value={user.username}>
+                      {user.username}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    {loadingUsers ? "Loading..." : "No users available"}
+                  </div>
+                )}
               </SelectContent>
             </Select>
           </div>
