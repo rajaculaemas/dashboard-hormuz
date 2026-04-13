@@ -9,7 +9,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { AlertCircle, X } from "lucide-react"
-import { ASSIGNEES } from "@/components/case/case-action-dialog"
 
 interface StellarCyberAlertUpdateDialogProps {
   open: boolean
@@ -43,6 +42,8 @@ export function StellarCyberAlertUpdateDialog({
   const [hasJwtKey, setHasJwtKey] = useState<boolean | null>(null)
   const [checkingJwt, setCheckingJwt] = useState(false)
   const [recheckAttempts, setRecheckAttempts] = useState(0)
+  const [stellarUsers, setStellarUsers] = useState<any[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
   const MAX_RECHECK_ATTEMPTS = 30 // Max 30 checks = up to 30 seconds of rechecking
 
   // Check if user has JWT API key when dialog opens or when it becomes visible
@@ -71,6 +72,36 @@ export function StellarCyberAlertUpdateDialog({
 
     return () => clearInterval(interval)
   }, [open, userId, hasJwtKey, recheckAttempts])
+
+  // Fetch Stellar Cyber users when dialog opens and JWT key is ready
+  useEffect(() => {
+    if (open && hasJwtKey === true) {
+      console.log("[Stellar Dialog] JWT key available, fetching Stellar users...")
+      fetchStellarUsers()
+    }
+  }, [open, hasJwtKey])
+
+  const fetchStellarUsers = async () => {
+    try {
+      setLoadingUsers(true)
+      const integrationId = alert?.integrationId || alert?.metadata?.integrationId || ""
+      const response = await fetch(`/api/stellar-cyber/users?integrationId=${integrationId}`)
+      const data = await response.json()
+      
+      if (data.success) {
+        console.log(`[Stellar Dialog] Fetched ${data.count} Stellar users`)
+        setStellarUsers(data.users || [])
+      } else {
+        console.error("[Stellar Dialog] Failed to fetch users:", data.error)
+        setStellarUsers([])
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error fetching Stellar users:", error)
+      setStellarUsers([])
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
 
   const checkJwtApiKey = async () => {
     try {
@@ -354,16 +385,22 @@ export function StellarCyberAlertUpdateDialog({
           {/* Assign To */}
           <div className="space-y-2">
             <Label htmlFor="assignee">Assign To (Local Only)</Label>
-            <Select value={assignee} onValueChange={setAssignee}>
+            <Select value={assignee} onValueChange={setAssignee} disabled={loadingUsers}>
               <SelectTrigger id="assignee">
-                <SelectValue placeholder="Select user (optional)" />
+                <SelectValue placeholder={loadingUsers ? "Loading users..." : "Select user (optional)"} />
               </SelectTrigger>
               <SelectContent>
-                {ASSIGNEES.map((user) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {user.name}
-                  </SelectItem>
-                ))}
+                {stellarUsers.length > 0 ? (
+                  stellarUsers.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.name}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    {loadingUsers ? "Loading..." : "No users available"}
+                  </div>
+                )}
               </SelectContent>
             </Select>
           </div>

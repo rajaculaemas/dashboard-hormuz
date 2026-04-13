@@ -306,6 +306,76 @@ export async function getAccessToken(integrationId?: string): Promise<string> {
   }
 }
 
+/**
+ * Get list of users from Stellar Cyber
+ * Requires admin credentials (USER_ID + REFRESH_TOKEN)
+ */
+export async function getStellarCyberUsers(integrationId?: string): Promise<any[]> {
+  try {
+    const { HOST } = await getStellarCyberCredentials(integrationId)
+
+    if (!HOST || HOST === "localhost") {
+      console.warn("Stellar Cyber host not configured, returning empty user list")
+      return []
+    }
+
+    // Get access token using admin credentials
+    const accessToken = await getAccessToken(integrationId)
+
+    if (!accessToken || accessToken.includes("error") || accessToken.includes("dummy")) {
+      console.warn("[StellarCyber] Failed to get access token, cannot fetch users")
+      return []
+    }
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    }
+
+    const url = urlunparse({
+      protocol: "https",
+      hostname: HOST,
+      pathname: "/connect/api/v1/users",
+    })
+
+    console.log(`[StellarCyber] Fetching users from: ${url}`)
+
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers,
+      })
+
+      console.log(`[StellarCyber] Users list response status: ${response.status}`)
+
+      if (!response.ok) {
+        console.error(`[StellarCyber] Failed to fetch users: ${response.status} ${response.statusText}`)
+        return []
+      }
+
+      const data = await response.json()
+
+      // Extract users from response
+      const users = data.data || data.users || []
+
+      console.log(`[StellarCyber] Retrieved ${users.length} users from Stellar Cyber`)
+
+      // Return formatted user list
+      return users.map((user: any) => ({
+        id: user.id || user.user_id || user.email,
+        name: user.name || user.username || user.email || "Unknown",
+        email: user.email || "",
+      }))
+    } finally {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    }
+  } catch (error) {
+    console.error("[StellarCyber] Error fetching users:", error)
+    return []
+  }
+}
+
 // Fungsi untuk mendapatkan daftar alert
 export async function getAlerts(params: {
   minScore?: number
