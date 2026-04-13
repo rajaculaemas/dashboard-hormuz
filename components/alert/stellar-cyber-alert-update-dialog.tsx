@@ -130,6 +130,11 @@ export function StellarCyberAlertUpdateDialog({
         body.severity = severity
       }
 
+      // Include assignee (Saved locally in DB, NOT sent to Stellar Cyber API)
+      if (assignee?.trim()) {
+        body.assignedTo = assignee
+      }
+
       // NOTE: Stellar Cyber API does NOT support assignee field
       // Only include assignee for integrations that support it (Socfortress, QRadar)
       // Do NOT send assignedTo for Stellar Cyber updates
@@ -344,6 +349,23 @@ export function StellarCyberAlertUpdateDialog({
                 </Button>
               )}
             </div>
+          </div>
+
+          {/* Assign To */}
+          <div className="space-y-2">
+            <Label htmlFor="assignee">Assign To (Local Only)</Label>
+            <Select value={assignee} onValueChange={setAssignee}>
+              <SelectTrigger id="assignee">
+                <SelectValue placeholder="Select user (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                {ASSIGNEES.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {user.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Comments */}
