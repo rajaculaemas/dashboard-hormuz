@@ -18,10 +18,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Only allow admin@soc-dashboard.local to escalate
-    if (user.email !== "admin@soc-dashboard.local") {
+    // Deny escalation for read-only users only
+    if (user.role === "read_only") {
       return NextResponse.json(
-        { error: "Only admin@soc-dashboard.local can escalate alerts" },
+        { error: "Read-only users cannot escalate alerts" },
         { status: 403 },
       )
     }
@@ -45,6 +45,26 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         )
       }
+    }
+
+    // Get alert to check integration
+    const alert = await prisma.alert.findUnique({
+      where: { id: alertId },
+      include: { integration: true },
+    })
+
+    if (!alert) {
+      return NextResponse.json({ error: "Alert not found" }, { status: 404 })
+    }
+
+    const integrationName = alert.integration?.name?.toLowerCase() || ""
+
+    // Support SOCFortress, Stellar Cyber, and QRadar integrations for escalation
+    if (!integrationName.includes("socfortress") && !integrationName.includes("stellar") && !integrationName.includes("qradar")) {
+      return NextResponse.json(
+        { error: `Escalation not supported for ${alert.integration?.name || "this"} integration` },
+        { status: 400 },
+      )
     }
 
     // Create escalation
@@ -73,18 +93,33 @@ export async function POST(request: NextRequest) {
         console.error(`Unknown status mapping for: ${status}`)
       } else {
         try {
+          const currentAlert = await prisma.alert.findUnique({
+            where: { id: alertId },
+          })
+
+          const updateData: any = {
+            status: dbStatus,
+          }
+
+          // Update integration-specific status fields if needed
+          if (integrationName.includes("socfortress")) {
+            const currentMetadata = (currentAlert?.metadata as any) || {}
+            updateData.metadata = {
+              ...currentMetadata,
+              socfortress: {
+                ...(currentMetadata?.socfortress || {}),
+                status: dbStatus,
+              },
+            }
+          } else if (integrationName.includes("stellar")) {
+            // Stellar Cyber stores status in metadata - keep existing metadata
+            const currentMetadata = (currentAlert?.metadata as any) || {}
+            updateData.metadata = currentMetadata
+          }
+
           await prisma.alert.update({
             where: { id: alertId },
-            data: {
-              status: dbStatus,
-              metadata: {
-                ...((await prisma.alert.findUnique({ where: { id: alertId } }))?.metadata || {}),
-                socfortress: {
-                  ...((await prisma.alert.findUnique({ where: { id: alertId } }))?.metadata?.socfortress || {}),
-                  status: dbStatus,
-                },
-              },
-            },
+            data: updateData,
           })
           console.log(`[Escalate] Updated alert ${alertId} status to ${dbStatus}`)
         } catch (error) {

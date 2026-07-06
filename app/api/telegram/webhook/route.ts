@@ -67,10 +67,11 @@ async function handleTextMessage(message: any) {
       return NextResponse.json({ ok: true })
     }
 
-    // Find the escalation by telegram message ID
-    const escalation = await prisma.alertEscalation.findFirst({
+    // Find the escalation by telegram message ID (supports both initial message and responses in conversation)
+    // Note: Status can be "pending" or "replied" - both are active escalations that can receive responses
+    let escalation = await prisma.alertEscalation.findFirst({
       where: {
-        status: "pending",
+        status: { in: ["pending", "replied"] }, // ← Allow both statuses!
         telegramChatId: chatId,
         telegramMessageId: String(replyToMessageId),
       },
@@ -80,8 +81,106 @@ async function handleTextMessage(message: any) {
       },
     })
 
+    // If not found in initial message, try searching in responses (conversation chain)
+    if (!escalation) {
+      console.log(`[Telegram] 🔍 Step 2: Message ${replyToMessageId} not found in escalations, checking responses for chat ${chatId}...`)
+      
+      const response = await prisma.alertEscalationResponse.findFirst({
+        where: {
+          telegramMessageId: String(replyToMessageId),
+          // SECURITY: Also check escalationId to prevent cross-escalation message mix-ups
+          escalation: {
+            telegramChatId: chatId,
+            status: { in: ["pending", "replied"] },
+          },
+        },
+        include: {
+          escalation: {
+            include: {
+              alert: true,
+              escalatedTo: true,
+            },
+          },
+        },
+      })
+
+      if (response?.escalation) {
+        escalation = response.escalation
+        console.log(`[Telegram] ✅ Found escalation ${escalation.id} (status: ${escalation.status}) from response chain with messageId ${replyToMessageId}`)
+      } else {
+        console.log(`[Telegram] ❌ No response found with telegramMessageId=${replyToMessageId} for chat ${chatId}`)
+        // Debug: check if ANY response exists for this chat
+        const allResponses = await prisma.alertEscalationResponse.findMany({
+          where: {
+            escalation: {
+              telegramChatId: chatId,
+              status: { in: ["pending", "replied"] },
+            },
+          },
+          select: {
+            telegramMessageId: true,
+            analysis: true,
+            escalationId: true,
+          },
+          take: 5,
+          orderBy: { createdAt: "desc" },
+        })
+        
+        if (allResponses.length > 0) {
+          console.log(`[Telegram] 📋 Recent responses for chat ${chatId}:`, allResponses.map(r => `[${r.escalationId.substring(0, 8)}] msg=${r.telegramMessageId} analysis="${r.analysis.substring(0, 20)}"`).join(" | "))
+          
+          // Try fallback: find most recent escalation for this chat
+          const mostRecentEscalation = await prisma.alertEscalation.findFirst({
+            where: {
+              telegramChatId: chatId,
+              status: { in: ["pending", "replied"] },
+            },
+            include: {
+              alert: true,
+              escalatedTo: true,
+            },
+            orderBy: { updatedAt: "desc" },
+          })
+          
+          if (mostRecentEscalation) {
+            console.log(`[Telegram] ✅ Fallback: Using most recent active escalation ${mostRecentEscalation.id} (status: ${mostRecentEscalation.status})`)
+            escalation = mostRecentEscalation
+          }
+        } else {
+          console.log(`[Telegram] ❌ No active responses found for chat ${chatId}`)
+          // Last resort: find ANY active escalation for this chat
+          const failoverEscalation = await prisma.alertEscalation.findFirst({
+            where: {
+              telegramChatId: chatId,
+              status: { in: ["pending", "replied"] },
+            },
+            include: {
+              alert: true,
+              escalatedTo: true,
+            },
+            orderBy: { createdAt: "desc" },
+          })
+          
+          if (failoverEscalation) {
+            console.log(`[Telegram] ⚠️ Failover: Using escalation ${failoverEscalation.id} (status: ${failoverEscalation.status})`)
+            escalation = failoverEscalation
+          }
+        }
+      }
+    }
+
     if (!escalation) {
       console.warn(`[Telegram] No escalation found for message ${replyToMessageId}`)
+      // Send user-friendly error message
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `❌ Escalation not found or already closed. Please wait for a new escalation to be sent to you.`,
+          reply_to_message_id: messageId,
+        }),
+      })
       return NextResponse.json({ ok: true })
     }
 
@@ -116,6 +215,26 @@ async function handleTextMessage(message: any) {
         responder: true,
       },
     })
+
+    // Check if there's a pending analysis prompt response and remove it
+    // (it was created as a placeholder when the "Reply Analysis" button was clicked)
+    if (replyToMessageId) {
+      const awaitingPrompt = await prisma.alertEscalationResponse.findFirst({
+        where: {
+          escalationId: escalation.id,
+          telegramMessageId: String(replyToMessageId),
+          analysis: "AWAITING_ANALYSIS_INPUT",
+        },
+      })
+
+      if (awaitingPrompt) {
+        // Remove the placeholder prompt record now that we have actual analysis
+        await prisma.alertEscalationResponse.delete({
+          where: { id: awaitingPrompt.id },
+        })
+        console.log(`[Telegram] Removed placeholder analysis prompt message record`)
+      }
+    }
 
     // Update escalation status
     await prisma.alertEscalation.update({
@@ -289,10 +408,10 @@ async function handleCallbackQuery(callbackQuery: any) {
 
     // Handle "Escalate to L3" button
     if (data === "escalate_l3") {
-      // Find escalation by message ID
+      // Find escalation by message ID - allow both "pending" and "replied" status
       const escalation = await prisma.alertEscalation.findFirst({
         where: {
-          status: "pending",
+          status: { in: ["pending", "replied"] },
           telegramChatId: chatId,
           telegramMessageId: String(messageId),
         },
@@ -363,6 +482,37 @@ async function handleCallbackQuery(callbackQuery: any) {
 
     // Handle "Reply with Analysis" button
     if (data.startsWith("reply_esc_")) {
+      // Extract escalationId from callback data: reply_esc_{escalationId}
+      const escalationId = data.replace("reply_esc_", "")
+      console.log(`[Telegram] Reply button clicked for escalation: ${escalationId}`)
+
+      // Verify escalation exists and is active (status: replied or pending)
+      const escalation = await prisma.alertEscalation.findFirst({
+        where: {
+          id: escalationId,
+          status: { in: ["pending", "replied"] },
+          telegramChatId: chatId,
+        },
+        include: {
+          alert: true,
+          escalatedTo: true,
+        },
+      })
+
+      if (!escalation) {
+        // Answer callback query with error
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            callback_query_id: callbackId,
+            text: "❌ Escalation not found or already closed",
+            show_alert: true,
+          }),
+        })
+        return NextResponse.json({ ok: true })
+      }
+
       // Send prompt for analysis
       const messageText = `📋 <b>Provide Your Analysis</b>
 
@@ -378,7 +528,7 @@ CONCLUSION: [verdict]</code>
 • DISMISS - Dismiss the alert
 • ESCALATE_L3 - Escalate to L3 (only for L2)`
 
-      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      const promptResponse = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -388,6 +538,63 @@ CONCLUSION: [verdict]</code>
           reply_to_message_id: messageId,
         }),
       })
+
+      const promptData = (await promptResponse.json()) as any
+      console.log(`[Telegram] Prompt message response:`, {
+        ok: promptData.ok,
+        messageId: promptData.result?.message_id,
+        hasError: !promptData.ok,
+        errorDesc: promptData.description,
+      })
+
+      if (promptData.ok && promptData.result?.message_id) {
+        console.log(`[Telegram] 📝 Creating dummy response record for prompt message ${promptData.result.message_id}...`)
+        // Store prompt message ID temporarily so we can trace replies back to escalation
+        // Use upsert to ensure record exists (handles unique constraint gracefully)
+        try {
+          const promptMessageId = String(promptData.result.message_id)
+          console.log(
+            `[Telegram] 🔄 Upserting: escalationId=${escalationId}, responderId=${escalation.escalatedToUserId}, messageId=${promptMessageId}`,
+          )
+
+          const dummyResponse = await prisma.alertEscalationResponse.upsert({
+            where: {
+              escalationId_telegramMessageId: {
+                escalationId,
+                telegramMessageId: promptMessageId,
+              },
+            },
+            create: {
+              escalationId,
+              responderId: escalation.escalatedToUserId,
+              analysis: "AWAITING_ANALYSIS_INPUT", // Marker for pending analysis prompt
+              conclusion: "PENDING",
+              action: "awaiting_response",
+              telegramMessageId: promptMessageId,
+            },
+            update: {},
+          })
+          console.log(
+            `[Telegram] ✅ Stored analysis prompt message link: ${promptMessageId} → escalation ${escalationId} (recordId: ${dummyResponse.id})`,
+          )
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err)
+          console.error(
+            `[Telegram] ❌ Failed to store prompt message link for escalation ${escalationId}:`,
+            {
+              error: errorMsg,
+              errorType: err instanceof Error ? err.constructor.name : typeof err,
+              stack: err instanceof Error ? err.stack : undefined,
+            },
+          )
+        }
+      } else {
+        console.error(`[Telegram] ❌ Failed to send prompt message:`, {
+          ok: promptData.ok,
+          description: promptData.description,
+          hasResult: !!promptData.result,
+        })
+      }
 
       // Answer callback query
       await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
@@ -452,6 +659,7 @@ async function escalateToL3(parentEscalation: any, l2Response: any) {
       l3User.telegramChatId,
       parentEscalation.alert,
       2, // escalationLevel = 2 for L3
+      l3Escalation.id, // Pass escalationId so button contains it
       {
         l1: parentEscalation.l1Analysis,
         l2: l2Response.analysis,

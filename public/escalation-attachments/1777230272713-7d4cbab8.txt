@@ -1,0 +1,170 @@
+{
+	"activity_id": "{1cf338a4-2b54-0001-cf38-f31c542bdc01}",
+	"actual": 0,
+	"actual_range": "01:00-02:00 UTC+7:00",
+	"agent": {
+		"computer_name": "WIN-B2P6KJJDTPQ",
+		"ephemeral_id": "17e7880c-3924-453b-95f5-231bc2f4bab2",
+		"id": "b89a4ac7-005d-4322-83e8-ad133c6a6e37",
+		"name": "ad03d4f5ef81d514",
+		"type": "winlogbeat",
+		"version": "8.5.3"
+	},
+	"anomaly_id": "nyX4yp0B2ybCvL1EZ0zf",
+	"computer_name": "WIN-B2P6KJJDTPQ",
+	"detected_fields": [
+		"event_data.TargetUserName"
+	],
+	"detected_values": [
+		"administrator"
+	],
+	"dscp_name": "Best Effort",
+	"ecs": {
+		"version": "8.0.0"
+	},
+	"end_bucket_time": 1777227000000,
+	"engid": "ad03d4f5ef81d514",
+	"engid_device_class": "Windows",
+	"engid_device_desc": "windows-x64(Windows Server 2019 Standard-10.0.17763)",
+	"engid_gateway": "118.97.50.108",
+	"engid_name": "WIN-B2P6KJJDTPQ",
+	"event": {
+		"outcome": "success"
+	},
+	"event_category": "uba",
+	"event_data": {
+		"PackageName": "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0",
+		"Status": "0x0",
+		"TargetUserName": "administrator",
+		"Workstation": "DESKTOP-RMM7F4R"
+	},
+	"event_id": 4776,
+	"event_name": "user_login_time",
+	"event_score": 43,
+	"event_source": "new_ml",
+	"event_status": "In Progress",
+	"event_type": "uba",
+	"fidelity": 51.16,
+	"forwarder_ip": "172.16.0.82",
+	"host": {
+		"ip": "172.16.0.82",
+		"name": "WIN-B2P6KJJDTPQ"
+	},
+	"hostip": "172.16.0.82",
+	"hostip_aella_flag": 1,
+	"hostip_assetid": "e302e510-d896-11ef-bd0f-3ad763a06a38",
+	"hostip_geo": {
+		"city": "South Tangerang",
+		"countryCode": "ID",
+		"countryName": "Indonesia",
+		"latitude": -6.2876,
+		"longitude": 106.722,
+		"region": "Banten"
+	},
+	"hostip_geo_point": "-6.2876,106.722",
+	"hostip_host": "WIN-B2P6KJJDTPQ",
+	"hostip_reputation": "Good",
+	"hostip_type": "private",
+	"hostip_version": "ipv4",
+	"keywords": [
+		"Audit Success"
+	],
+	"lateral": false,
+	"level": "Information",
+	"locid": "unassigned location",
+	"log_name": "Security",
+	"login_result": "success",
+	"login_type": "windows_login",
+	"msg_class": "Microsoft-Windows-Security-Auditing",
+	"msg_origin": {
+		"category": "endpoint",
+		"processor": {
+			"type": "winlogbeat"
+		},
+		"product": "auditbeat",
+		"source": "windows_agent",
+		"vendor": "elastic"
+	},
+	"opcode": "Info",
+	"org_id": "default-organization",
+	"org_name": "default-organization",
+	"orig_id": "nyX4yp0B2ybCvL1EZ0zf",
+	"orig_index": "aella-wineventlog-2026.04.26-dae431cb3d084881aba7ab17715ecd18",
+	"process_id": 832,
+	"process_time": 1777226767090,
+	"provider_guid": "{54849625-5478-4994-a5ba-3e3b0328c30d}",
+	"receive_time": 1777226768135,
+	"record_number": "324477077",
+	"service_id": "DESKTOP-RMM7F4R",
+	"severity": 40,
+	"source_name": "Microsoft-Windows-Security-Auditing",
+	"srcip_username": "administrator",
+	"start_bucket_time": 1777226700000,
+	"stellar": {
+		"alert_time": 1777227302690,
+		"alert_timestamp_field": "write_time",
+		"detection_time": 532309,
+		"status": "New"
+	},
+	"stellar_da_input": 1489,
+	"stellar_index_id": "aella-ser-2026.04.26-dae431cb3d084881aba7ab17715ecd18",
+	"stellar_uuid": "8ccb1045-9bdb-4c59-aa5d-6f2569c205a31777227302730-YWVsbGEtc2VyLTIwMjYuMDQuMjYtZGFlNDMxY2IzZDA4NDg4MWFiYTdhYjE3NzE1ZWNkMTg=",
+	"task": "Credential Validation",
+	"tenant_name": "TVRI",
+	"tenantid": "dae431cb3d084881aba7ab17715ecd18",
+	"thread_id": 1276,
+	"threat_score": 0,
+	"timestamp": 1777226766632,
+	"timestamp_utc": "2026-04-26T18:06:06.000Z",
+	"type": "wineventlog",
+	"typical": 0.59,
+	"typical_range": "07:00-12:00 UTC+7:00",
+	"username": "administrator",
+	"write_by": "sef",
+	"write_time": 1777227302730,
+	"xdr_event": {
+		"description": "The account administrator has logged in at an abnormal time range 01:00-02:00 UTC+7:00, compared to the typical login time range: 07:00-12:00 UTC+7:00 observed for this account.",
+		"display_name": "Login Time Anomaly",
+		"framework_version": "v8",
+		"name": "user_login_time",
+		"scope": "External",
+		"tactic": {
+			"id": "XTA0004",
+			"name": "XDR UBA"
+		},
+		"tags": [
+			"External",
+			"User Behavior Analytics",
+			"Identity Detection"
+		],
+		"technique": {
+			"id": "XT4005",
+			"name": "XDR Time Anomaly"
+		},
+		"xdr_killchain_stage": "Initial Attempts",
+		"xdr_killchain_version": "v1"
+	},
+	"user_action": {
+		"first_timestamp": 1777228204816,
+		"last_user": "rpratama",
+		"history": [
+			{
+				"action_user": "rpratama",
+				"action_time": 1777228209227,
+				"action": "Event assignee changed to rpratama"
+			},
+			{
+				"action_user": "rpratama",
+				"action_time": 1777228204816,
+				"action": "Status changed to In Progress"
+			}
+		],
+		"last_action": "Event assignee changed to rpratama",
+		"last_modified": 1777228209227,
+		"alert_to_first": 902086
+	},
+	"assignee": "rpratama",
+	"_index": "aella-ser-1775178065087-",
+	"_id": "8ccb1045-9bdb-4c59-aa5d-6f2569c205a31777227302730-YWVsbGEtc2VyLTIwMjYuMDQuMjYtZGFlNDMxY2IzZDA4NDg4MWFiYTdhYjE3NzE1ZWNkMTg=",
+	"_type": "amsg"
+}

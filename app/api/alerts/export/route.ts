@@ -185,11 +185,54 @@ function formatMTTD(alert: any) {
   }
 }
 
+// Helper: format epoch milliseconds to a human-readable UTC+7 date string
+function formatEpochMs(epochMs: any): string {
+  if (!epochMs) return ''
+  const ms = typeof epochMs === 'number' ? epochMs : Number(epochMs)
+  if (isNaN(ms) || ms <= 0) return ''
+  try {
+    const date = new Date(ms)
+    return date.toLocaleString('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
+
+// Helper: return a Date object shifted +7 hours so Excel serial number displays UTC+7
+// Excel has no timezone concept - the serial number is displayed as-is
+function toUtc7ExcelDate(ts: any): Date | null {
+  if (!ts) return null
+  let ms: number
+  if (ts instanceof Date) {
+    ms = ts.getTime()
+  } else if (typeof ts === 'number') {
+    ms = ts > 1_000_000_000_000 ? ts : ts * 1000
+  } else if (typeof ts === 'string') {
+    ms = new Date(ts).getTime()
+    if (isNaN(ms)) return null
+  } else {
+    return null
+  }
+  if (ms <= 0) return null
+  // Shift +7 hours so Excel displays UTC+7
+  return new Date(ms + 7 * 60 * 60 * 1000)
+}
+
 const COLUMN_LABELS: Record<string,string> = {
   timestamp: 'Timestamp',
   title: 'Alert Name',
   srcip: 'Source IP',
   dstip: 'Destination IP',
+  publicRemoteIp: 'Public Remote IP',
+  assignedLocalIp: 'Assigned Local IP',
   responseCode: 'Response Code',
   response_code: 'Response Code',
   integration: 'Integration',
@@ -214,17 +257,48 @@ const COLUMN_LABELS: Record<string,string> = {
   mitreTactic: 'MITRE Tactic',
   mitreId: 'MITRE ID',
   tags: 'Tags',
+  assignee: 'Assignee',
+  // QRadar-specific columns
+  qradarOffenseId: 'Offense ID',
+  qradarOffenseSource: 'Offense Source',
+  qradarCloseTime: 'Closed Time',
+  qradarSourceUsername: 'Source Username',
+  qradarApp: 'App',
+  qradarDestHost: 'Destination Host',
+  qradarSrcCountry: 'Source Country',
+  qradarDstCountry: 'Destination Country',
+  qradarNotes: 'Comment/Notes',
 }
 
 function formatValueForColumn(alert: any, columnId: string) {
   const meta = alert.metadata || {}
   try {
     switch (columnId) {
-      case 'timestamp': return (alert.timestamp || alert.created_at || meta.timestamp || meta.raw_es?.timestamp || '')
+      case 'timestamp':
+      case 'alert_time': {
+        const ts = alert.alert_time || alert.timestamp || alert.created_at || meta.alert_time || meta.timestamp || meta.raw_es?.timestamp
+        return toUtc7ExcelDate(ts) ?? ''
+      }
       case 'title':
         return alert.title || meta.rule?.description || meta.ruleDescription || alert.description || ''
-      case 'srcip': return extractWazuhNetworkFields(alert).srcIp || ''
-      case 'dstip': return extractWazuhNetworkFields(alert).dstIp || ''
+      case 'srcip': {
+        // QRadar: try sourceip field first, then fallback to Wazuh extraction
+        const qSrc = meta.qradar?.sourceip || meta.qradar?.sourceIp
+        if (qSrc) return String(qSrc)
+        return extractWazuhNetworkFields(alert).srcIp || ''
+      }
+      case 'dstip': {
+        // QRadar: try destinationip field, then fallback to Wazuh extraction
+        const qDst = meta.qradar?.destinationip || meta.qradar?.destinationIp
+        if (qDst) return String(qDst)
+        return extractWazuhNetworkFields(alert).dstIp || ''
+      }
+      case 'publicRemoteIp':
+        // QRadar-specific field
+        return meta.qradar?.public_remote_ip || meta.qradar?.publicRemoteIp || ''
+      case 'assignedLocalIp':
+        // QRadar-specific field
+        return meta.qradar?.assigned_local_ip || meta.qradar?.assignedLocalIp || ''
       case 'responseCode':
       case 'response_code': {
         const net = extractWazuhNetworkFields(alert)
@@ -258,7 +332,7 @@ function formatValueForColumn(alert: any, columnId: string) {
       case 'severity': return alert.severity || ''
       case 'status': return alert.status || ''
       case 'sourcePort': return meta.srcPort || meta.srcport || meta.src_port || meta.source_port || alert.srcPort || ''
-      case 'destinationPort': return meta.dstPort || meta.dstport || meta.dst_port || meta.destination_port || alert.dstPort || ''
+      case 'destinationPort': return meta.dstPort || meta.dstport || meta.dst_port || meta.destination_port || meta.qradar?.destination_port || alert.dstPort || ''
       case 'protocol': return meta.protocol || meta.http_method || alert.protocol || ''
       case 'imageLoaded': return extractWazuhFileHashes(alert).image || ''
       case 'md5': return extractWazuhFileHashes(alert).md5 || extractWazuhFileHashes(alert).raw || ''
@@ -279,8 +353,76 @@ function formatValueForColumn(alert: any, columnId: string) {
       case 'mitreTactic': return meta.rule?.mitre?.tactic?.[0] || meta.mitreTactic || ''
       case 'mitreId': return meta.rule?.mitre?.id?.[0] || meta.mitreId || ''
       case 'tags': return (meta.tags || alert.tags || []).join(', ')
+      case 'assignee':
+        return meta.assignee || meta.qradar?.assigned_to || meta.assigned_to || ''
       case 'id':
       case 'alertId': return alert.id || ''
+      // QRadar-specific columns
+      case 'qradarOffenseId': {
+        // metadata.qradar.id is the numeric offense ID
+        const qId = meta.qradar?.id
+        if (qId !== undefined && qId !== null) return String(qId)
+        // fallback: parse from externalId format "qradar-{integId}-{offenseId}"
+        const extId = alert.externalId || ''
+        const m = extId.match(/qradar-[^-]+-(.+)$/)
+        return m ? m[1] : ''
+      }
+      case 'qradarOffenseSource':
+        return meta.qradar?.offense_source || meta.offense_source || ''
+      case 'qradarCloseTime': {
+        const ct = meta.qradar?.close_time
+        return ct ? (toUtc7ExcelDate(ct) ?? '') : ''
+      }
+      case 'qradarSourceUsername':
+        return meta.username || meta.qradar?.assigned_to || ''
+      case 'qradarApp': {
+        // Use log_sources type_name joined, fallback to categories
+        const logSources = meta.qradar?.log_sources
+        if (Array.isArray(logSources) && logSources.length > 0) {
+          const names = logSources.map((ls: any) => ls.type_name || ls.name).filter(Boolean)
+          if (names.length > 0) return names.join(', ')
+        }
+        const cats = meta.qradar?.categories
+        if (Array.isArray(cats) && cats.length > 0) return cats.join(', ')
+        return ''
+      }
+      case 'qradarDestHost': {
+        const dstNets = meta.qradar?.destination_networks
+        if (Array.isArray(dstNets) && dstNets.length > 0) return dstNets.join(', ')
+        return ''
+      }
+      case 'qradarSrcCountry':
+        return meta.qradar?.source_network || ''
+      case 'qradarDstCountry': {
+        const dstNets = meta.qradar?.destination_networks
+        if (Array.isArray(dstNets) && dstNets.length > 0) return dstNets.join(', ')
+        return ''
+      }
+      case 'qradarNotes': {
+        // Helper: non-null and non-empty
+        const nn = (v: any) => (v && (!Array.isArray(v) || v.length > 0)) ? v : null
+        const notesData =
+          nn(meta.comment) ||
+          nn(meta.qradar?.notes) ||
+          nn(meta.notes) ||
+          nn(meta.comments) ||
+          nn(alert.notes) ||
+          null
+        if (!notesData) return ''
+        const formatNote = (note: any): string => {
+          if (!note || typeof note !== 'object') return String(note || '')
+          const text = note.note_text || note.comment || ''
+          const user = note.username || note.comment_user || ''
+          return user ? `${text} (by ${user})` : text
+        }
+        if (Array.isArray(notesData)) {
+          if (notesData.length === 0) return ''
+          const latest = notesData[notesData.length - 1]
+          return typeof latest === 'object' ? formatNote(latest) : String(latest)
+        }
+        if (typeof notesData === 'object') return formatNote(notesData)
+        return String(notesData)
+      }
       default:
         return meta[columnId] ?? ''
     }
@@ -295,6 +437,7 @@ export async function GET(req: NextRequest) {
     const sp = url.searchParams
 
     const integrationId = sp.get('integrationId')
+    const integrationIds = sp.get('integrationIds') // comma-separated
     const timeRange = sp.get('time_range') || '7d'
     const fromDate = sp.get('from_date')
     const toDate = sp.get('to_date')
@@ -345,7 +488,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (integrationId && integrationId !== 'all') whereClause.integrationId = integrationId
+    // Handle multiple integration IDs (comma-separated)
+    if (integrationIds && integrationIds !== 'all') {
+      const requestedIds = integrationIds.split(',').map((id: string) => id.trim())
+      whereClause.integrationId = { in: requestedIds }
+    } else if (integrationId && integrationId !== 'all') {
+      // Backward compatibility: single integration ID
+      whereClause.integrationId = integrationId
+    }
     if (status && status !== 'all') whereClause.status = status
     if (severity && severity !== 'all') whereClause.severity = severity
     if (search && search.trim() !== '') {
@@ -377,6 +527,103 @@ export async function GET(req: NextRequest) {
       })
     }
 
+    // Batch-merge notes from qradar_offenses for QRadar alerts with empty/missing notes cache
+    if (columns.includes('qradarNotes')) {
+      const qradarAlerts = alerts.filter((a: any) => a.integration?.source === 'qradar')
+      const needsNotes = qradarAlerts.filter((a: any) => {
+        const meta = (a.metadata as any) || {}
+        const notes = meta.qradar?.notes
+        // Needs merge if notes are missing or empty array
+        return !notes || (Array.isArray(notes) && notes.length === 0)
+      })
+      if (needsNotes.length > 0) {
+        const offenseIds = needsNotes
+          .map((a: any) => {
+            const id = (a.metadata as any)?.qradar?.id
+            return id != null ? parseInt(String(id), 10) : null
+          })
+          .filter((id: number | null): id is number => id !== null)
+        if (offenseIds.length > 0) {
+          const offenses = await prisma.qRadarOffense.findMany({
+            where: { externalId: { in: offenseIds } },
+            select: { externalId: true, integrationId: true, metadata: true },
+          })
+          const offenseMap = new Map<string, any[]>()
+          for (const off of offenses) {
+            const notes = (off.metadata as any)?.notes
+            if (Array.isArray(notes) && notes.length > 0) {
+              offenseMap.set(`${off.externalId}-${off.integrationId}`, notes)
+            }
+          }
+          for (const a of needsNotes) {
+            const offenseId = (a.metadata as any)?.qradar?.id
+            const key = `${offenseId}-${a.integrationId}`
+            const notes = offenseMap.get(key)
+            if (notes) {
+              const m = (a.metadata as any) || {}
+              m.qradar = m.qradar || {}
+              m.qradar.notes = notes
+              ;(a as any).metadata = m
+            }
+          }
+        }
+      }
+    }
+
+    // Batch-merge IPs from related events for QRadar alerts missing IPs
+    if (columns.includes('srcip') || columns.includes('dstip') || columns.includes('publicRemoteIp') || columns.includes('assignedLocalIp')) {
+      const qradarAlerts = alerts.filter((a: any) => a.integration?.source === 'qradar')
+      const needsIps = qradarAlerts.filter((a: any) => {
+        const meta = (a.metadata as any) || {}
+        const hasSourceIp = meta.qradar?.sourceip || meta.sourceip
+        const hasDestIp = meta.qradar?.destinationip || meta.destinationip
+        const hasPublicRemoteIp = meta.qradar?.public_remote_ip
+        const hasAssignedLocalIp = meta.qradar?.assigned_local_ip
+        return !hasSourceIp || !hasDestIp || !hasPublicRemoteIp || !hasAssignedLocalIp
+      })
+      if (needsIps.length > 0) {
+        const offenseIds = needsIps
+          .map((a: any) => {
+            const id = (a.metadata as any)?.qradar?.id
+            return id != null ? parseInt(String(id), 10) : null
+          })
+          .filter((id: number | null): id is number => id !== null)
+        if (offenseIds.length > 0) {
+          const events = await prisma.qRadarEvent.findMany({
+            where: { offenseId: { in: offenseIds } },
+            select: { offenseId: true, sourceIp: true, destinationIp: true, metadata: true },
+            distinct: ['offenseId'],
+            orderBy: { eventTimestamp: 'desc' },
+          })
+          const eventMap = new Map<number, any>()
+          for (const evt of events) {
+            if (!eventMap.has(evt.offenseId)) {
+              eventMap.set(evt.offenseId, evt)
+            }
+          }
+          for (const a of needsIps) {
+            const offenseId = (a.metadata as any)?.qradar?.id
+            const event = eventMap.get(offenseId)
+            if (event) {
+              const m = (a.metadata as any) || {}
+              m.qradar = m.qradar || {}
+              if (event.sourceIp && !m.qradar.sourceip) m.qradar.sourceip = event.sourceIp
+              if (event.destinationIp && !m.qradar.destinationip) m.qradar.destinationip = event.destinationIp
+              // Also merge public_remote_ip and assigned_local_ip if available
+              const eventMeta = (event.metadata as any) || {}
+              if (!m.qradar.public_remote_ip && eventMeta.public_remote_ip) {
+                m.qradar.public_remote_ip = eventMeta.public_remote_ip
+              }
+              if (!m.qradar.assigned_local_ip && eventMeta.assigned_local_ip) {
+                m.qradar.assigned_local_ip = eventMeta.assigned_local_ip
+              }
+              ;(a as any).metadata = m
+            }
+          }
+        }
+      }
+    }
+
     // Build workbook
     const wb = new ExcelJS.Workbook()
     const ws = wb.addWorksheet('Alerts')
@@ -385,9 +632,19 @@ export async function GET(req: NextRequest) {
     const headerLabels = columns.map((c) => COLUMN_LABELS[c] || c)
     ws.addRow(headerLabels)
 
+    const DATE_COLS = new Set(['timestamp', 'alert_time', 'qradarCloseTime'])
     for (const a of alerts) {
-      const row = columns.map((col) => formatValueForColumn(a, col))
-      ws.addRow(row)
+      const rowValues = columns.map((col) => formatValueForColumn(a, col))
+      const excelRow = ws.addRow(rowValues)
+      // Apply date number format to date columns so Excel shows them as dates (not General)
+      columns.forEach((col, idx) => {
+        if (DATE_COLS.has(col)) {
+          const cell = excelRow.getCell(idx + 1)
+          if (cell.value instanceof Date) {
+            cell.numFmt = 'dd/mm/yyyy hh:mm:ss'
+          }
+        }
+      })
     }
 
     const buffer = await wb.xlsx.writeBuffer()

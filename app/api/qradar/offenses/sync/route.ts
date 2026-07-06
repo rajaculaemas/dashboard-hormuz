@@ -35,9 +35,11 @@ export async function POST(request: NextRequest) {
     }
 
     const creds = integration.credentials as any
+    const domainId = creds.domain_id ? Number(creds.domain_id) : undefined
     const qradarClient = new QRadarClient({
       host: creds.host,
       api_key: creds.api_key,
+      domain_id: domainId,
     })
 
     // Fetch offenses from last 96 hours

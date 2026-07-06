@@ -19,7 +19,10 @@ export const SOCFORTRESS_USERS = [
   { id: 362, username: "fannisa" },
   { id: 363, username: "teguhalam" },
   { id: 399, username: "aalindra" },
-  { id: 403, username: "scheduler" },
+  { id: 429, username: "hgagas" },
+  { id: 430, username: "rpratama" },
+  { id: 431, username: "mjaya" },
+  { id: 462, username: "scheduler" },
 ]
 
 export const ALERT_TAGS = [

@@ -12,9 +12,13 @@ export async function POST(request: NextRequest) {
       severity,
       status,
       assignee,
+      assignedTo,  // Also accept assignedTo for consistency
       comment,
       integrationId,
     } = body
+
+    // Support both assignee and assignedTo field names
+    const resolvedAssignee = assignedTo || assignee || ""
 
     // Support both single alertId and multiple alertIds
     const idsToProcess = Array.isArray(alertIds) && alertIds.length > 0 
@@ -55,12 +59,22 @@ export async function POST(request: NextRequest) {
     // Extract _index and cust_id from alerts metadata
     const alertsForCase = alerts.map((alert) => {
       const metadata = (alert.metadata as any) || {}
-      const _index = metadata.alert_index || metadata.index || ""
+      // Get _index and clean it up - remove trailing dashes and whitespace
+      let _index = (metadata.alert_index || metadata.index || "").trim()
+      // Remove trailing dashes which cause 422 validation errors in Stellar Cyber
+      _index = _index.replace(/\-+$/, "")
+      
       const cust_id = metadata.cust_id || ""
 
       if (!_index) {
         throw new Error(`Alert ${alert.id} missing index (_index) in metadata`)
       }
+
+      console.log("[add-to-case] Alert index extracted:", {
+        alertId: alert.id,
+        originalIndex: metadata.alert_index || metadata.index,
+        cleanedIndex: _index,
+      })
 
       return {
         _id: alert.externalId,
@@ -86,7 +100,7 @@ export async function POST(request: NextRequest) {
       cust_id,
       severity: severity || firstAlert.severity,
       status: status || "New",
-      assignee: assignee || "",
+      assignee: resolvedAssignee,
       tags: [],
       comment: comment || `Created from ${alerts.length} alert(s)`,
       integrationId,
@@ -123,7 +137,7 @@ export async function POST(request: NextRequest) {
         status: caseData.status || status || "New",
         severity: caseData.severity || severity || firstAlert.severity,
         description: caseData.description || description || "",
-        assignee: caseData.assignee || assignee || null,
+        assignee: caseData.assignee || resolvedAssignee || null,
         assigneeName: caseData.assignee_name || null,
         ticketId,
         integrationId,

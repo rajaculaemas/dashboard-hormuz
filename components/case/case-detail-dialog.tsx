@@ -18,6 +18,7 @@ import {
   RefreshCwIcon,
   EyeIcon,
   MessageSquareIcon,
+  FileTextIcon,
 } from "lucide-react"
 import { SafeDate } from "@/components/ui/safe-date"
 import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
@@ -25,7 +26,8 @@ import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-di
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { SocfortressAlertDetailDialog } from "@/components/alert/socfortress-alert-detail-dialog"
 import { EventDetailDialog } from "@/components/alert/event-detail-dialog"
-import { ASSIGNEES } from "@/components/case/case-action-dialog"
+import { ASSIGNEES, QRADAR_ASSIGNEES } from "@/components/case/case-action-dialog"
+import { TicketDraftDialog } from "@/components/case/ticket-draft-dialog"
 
 interface CaseDetailDialogProps {
   open: boolean
@@ -112,6 +114,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
   const [timelineEvents, setTimelineEvents] = useState<any[]>([])
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null)
   const [alertDetailOpen, setAlertDetailOpen] = useState(false)
+  const [ticketDraftOpen, setTicketDraftOpen] = useState(false)
 
   const isWazuhIntegration = (integration?: { source?: string; name?: string }) => {
     const name = integration?.name?.toLowerCase?.() || ""
@@ -159,7 +162,14 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       setCaseDetail(caseData)
       fetchCaseDetails(caseData.id)
       fetchCaseAlerts(caseData.id)
-      fetchCaseComments(caseData.id)
+      // Only fetch comments for remote integrations (Stellar Cyber, SOCFortress)
+      // Local-only integrations (Wazuh, QRadar) don't have comments
+      const integrationSource = caseData.integration?.source
+      if (integrationSource === 'stellar' || integrationSource === 'socfortress' || integrationSource === 'copilot') {
+        fetchCaseComments(caseData.id)
+      } else {
+        setComments([])
+      }
       fetchCaseTimeline(caseData.id)
     }
   }, [open, caseData])
@@ -173,6 +183,11 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       if (assignee) {
         return assignee.name
       }
+      // Also check QRADAR_ASSIGNEES
+      const qradarAssignee = QRADAR_ASSIGNEES.find((a) => a.id === assigneeId)
+      if (qradarAssignee) {
+        return qradarAssignee.name
+      }
     }
     return "Unassigned"
   }
@@ -181,11 +196,12 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     // Fetch fresh case details from server to ensure we have latest data
     // especially for status, assignee, and timestamps
     try {
-      // Determine if this is a Wazuh or SOCFortress case based on integration source
+      // Determine if this is a Wazuh, QRadar, or SOCFortress case based on integration source
       const isWazuh = isWazuhIntegration(caseData?.integration)
+      const isQRadar = caseData?.integration?.source === "qradar"
       const isSocfortress = isSocfortressIntegration(caseData?.integration)
       
-      console.log("Fetching case details - id:", id, "isWazuh:", isWazuh, "isSocfortress:", isSocfortress)
+      console.log("Fetching case details - id:", id, "isWazuh:", isWazuh, "isQRadar:", isQRadar, "isSocfortress:", isSocfortress)
       console.log("caseData available:", !!caseData, "caseData.alerts:", caseData?.alerts?.length || 0)
       
       // NOTE: REMOVED early return for SOCFortress - must fetch from API to get complete metadata (case_history)!
@@ -196,6 +212,8 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
       let endpoint = `/api/cases/${id}`
       if (isWazuh) {
         endpoint = `/api/wazuh/cases?caseId=${id}`
+      } else if (isQRadar) {
+        endpoint = `/api/qradar/cases/${id}`
       }
       
       console.log("Fetching case details from:", endpoint)
@@ -222,7 +240,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           ticketId: parseInt(wazuhCase.caseNumber) || 0,
           name: wazuhCase.title || `Case ${wazuhCase.caseNumber}`,
           description: wazuhCase.description || "",
-          status: wazuhCase.status === "open" ? "New" : wazuhCase.status === "in_progress" ? "In Progress" : "Resolved",
+          status: wazuhCase.status, // Backend already normalizes status
           severity: caseSeverity,
           assignee: wazuhCase.assignee?.name,
           assigneeName: wazuhCase.assignee?.name,
@@ -234,6 +252,30 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           alerts: wazuhCase.alerts, // Include alerts from Wazuh case
         } as any
         console.log("Fetched Wazuh case details:", transformedCase)
+        setCaseDetail(transformedCase)
+      } else if (isQRadar && data && !data.error) {
+        // For QRadar, the endpoint returns the case directly with included alerts
+        console.log("Fetched QRadar case details:", { caseId: data.id, alertCount: data.alerts?.length || 0 })
+        
+        // Transform QRadar case to CaseDetail interface
+        const transformedCase = {
+          id: data.id,
+          externalId: data.caseNumber,
+          ticketId: parseInt(data.caseNumber) || 0,
+          name: data.title,
+          description: data.description || "",
+          status: data.status, // Backend already normalizes status
+          severity: data.severity || "Medium",
+          assignee: data.assignee?.id,
+          assigneeName: data.assignee?.name,
+          createdAt: new Date(data.createdAt),
+          modifiedAt: new Date(data.updatedAt || data.createdAt),
+          createdBy: data.createdBy,
+          metadata: {},
+          integration: caseData.integration || { id: "", name: "QRadar" },
+          alerts: data.alerts || [], // Include alerts from QRadar case
+          mttrMinutes: data.mttrMinutes,
+        } as any
         setCaseDetail(transformedCase)
       } else if (data.success && data.data) {
         // For Stellar Cyber and other sources (via /api/cases endpoint)
@@ -504,6 +546,45 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           console.log("Frontend: No alerts in SOCFortress case from", caseDetail?.alerts ? "caseDetail" : "caseData")
           setAlerts([])
         }
+      } else if (caseDetail?.integration?.source === "qradar") {
+        // For QRadar cases (new ones stored in QRadarCase table)
+        console.log("Frontend: This is a QRadar case - checking for alerts")
+        
+        // Try to use alerts from caseDetail first (from the fetch case details API call)
+        if (caseDetail?.alerts && Array.isArray(caseDetail.alerts) && caseDetail.alerts.length > 0) {
+          console.log("Frontend: Using", caseDetail.alerts.length, "QRadar alerts from caseDetail")
+          
+          const transformedAlerts = caseDetail.alerts.map((caseAlert: any) => {
+            // caseAlert could be QRadarCaseAlert object which has shape: { caseId, alertId, alert }
+            const alert = caseAlert.alert || caseAlert
+            console.log("Frontend: Processing QRadar alert:", alert.title || alert.id)
+            
+            return {
+              _id: alert.id,
+              alert_name: alert.title,
+              xdr_event: {
+                display_name: alert.title,
+              },
+              severity: alert.severity || "Unknown",
+              alert_time: alert.timestamp ? new Date(alert.timestamp).getTime() : (alert.createdAt ? new Date(alert.createdAt).getTime() : 0),
+              status: alert.status || "Unknown",
+              source_ip: alert.metadata?.srcIp || alert.metadata?.sourceip,
+              dest_ip: alert.metadata?.dstIp || alert.metadata?.destinationip,
+              description: alert.description || "",
+              metadata: alert.metadata || {},
+              id: alert.id,
+              externalId: alert.externalId,
+              title: alert.title,
+              timestamp: alert.timestamp || alert.createdAt,
+            }
+          })
+          
+          setAlerts(transformedAlerts)
+          console.log("Frontend: Successfully set QRadar alerts:", transformedAlerts.length)
+        } else {
+          console.log("Frontend: No alerts in QRadar caseDetail")
+          setAlerts([])
+        }
       } else {
         // For other integrations, use original API
         console.log("Frontend: Using original API for non-Wazuh case")
@@ -688,7 +769,8 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     try {
       console.log("Frontend: Fetching timeline for case:", id)
       const isSocfortress = isSocfortressIntegration(caseDetail?.integration ?? caseData?.integration)
-      console.log("Frontend: isSocfortress:", isSocfortress, "caseDetail exists:", !!caseDetail)
+      const isQRadar = (caseDetail?.integration ?? caseData?.integration)?.source === "qradar"
+      console.log("Frontend: isSocfortress:", isSocfortress, "isQRadar:", isQRadar, "caseDetail exists:", !!caseDetail)
       console.log("Frontend: caseDetail object:", { id: caseDetail?.id, name: caseDetail?.name, createdAt: caseDetail?.createdAt, timestamp: caseDetail?.timestamp })
       console.log("Frontend: caseData object:", { id: caseData?.id, name: caseData?.name, createdAt: caseData?.createdAt, timestamp: caseData?.timestamp })
       console.log("Frontend: alerts array:", alerts?.length || 0, "items")
@@ -806,9 +888,88 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
         
         setTimelineEvents(timelineEvents)
         console.log("Frontend: Successfully built SOCFortress timeline events:", timelineEvents.length, "Events:", timelineEvents.map(e => ({ title: e.title, time: new Date(e.timestamp).toLocaleString() })))
+      } else if (isQRadar) {
+        // For QRadar cases, build timeline from caseDetail.timeline (already fetched from API)
+        console.log("Frontend: Building QRadar timeline from caseDetail.timeline")
+        const timelineEvents: any[] = []
+        
+        // Determine case creation timestamp
+        let caseCreatedTime = 0
+        if (caseDetail?.createdAt) {
+          const parsed = new Date(caseDetail.createdAt).getTime()
+          caseCreatedTime = !isNaN(parsed) ? parsed : 0
+        }
+        
+        // Event 1: Case created
+        if (caseCreatedTime > 0) {
+          const caseName = caseDetail?.name || "Unknown Case"
+          timelineEvents.push({
+            eventId: `case-created-${caseDetail?.id}`,
+            timestamp: caseCreatedTime,
+            title: "Case Created",
+            description: `QRadar case "${caseName}" was created`,
+            eventType: "created",
+            metadata: {
+              caseId: caseDetail?.id,
+              caseName: caseName,
+            }
+          })
+        }
+        
+        // Event 2: QRadar case timeline events from database
+        const qradarTimeline = caseDetail?.timeline || []
+        console.log("Frontend: Processing QRadar timeline events:", qradarTimeline.length)
+        
+        if (Array.isArray(qradarTimeline) && qradarTimeline.length > 0) {
+          qradarTimeline.forEach((event: any, idx: number) => {
+            const timestamp = event.timestamp ? new Date(event.timestamp).getTime() : caseCreatedTime
+            
+            let title = ""
+            let eventType = "modified"
+            
+            // Map eventType to human-readable title
+            if (event.eventType === "created") {
+              title = "Case Created"
+              eventType = "created"
+            } else if (event.eventType === "status_changed") {
+              title = "Status Changed"
+              eventType = "status_change"
+            } else if (event.eventType === "assignee_changed") {
+              title = "Assignee Changed"
+              eventType = "assignee_change"
+            } else if (event.eventType === "severity_changed") {
+              title = "Severity Changed"
+              eventType = "severity_change"
+            } else {
+              title = event.eventType || "Event"
+              eventType = "modified"
+            }
+            
+            timelineEvents.push({
+              eventId: `qradar-timeline-${idx}-${event.id}`,
+              timestamp,
+              title,
+              description: event.description || "",
+              eventType,
+              metadata: {
+                eventType: event.eventType,
+                oldValue: event.oldValue,
+                newValue: event.newValue,
+                changedBy: event.changedBy,
+                changedByUserId: event.changedByUserId,
+              }
+            })
+          })
+        }
+        
+        // Sort timeline events by timestamp (descending = newest first)
+        timelineEvents.sort((a, b) => b.timestamp - a.timestamp)
+        
+        setTimelineEvents(timelineEvents)
+        console.log("Frontend: Successfully built QRadar timeline events:", timelineEvents.length)
       } else {
         // For other integrations, use the API endpoint
-        console.log("Frontend: Fetching timeline from API for non-SOCFortress case")
+        console.log("Frontend: Fetching timeline from API for non-SOCFortress/QRadar case")
         const response = await fetch(`/api/cases/${id}/timeline`)
         const data = await response.json()
 
@@ -1006,6 +1167,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
   // Create timeline events from case data and comments
   const getTimelineEvents = () => {
     const events = []
+    let eventIndex = 0
 
     // If we have timeline events from database (Wazuh, QRadar, or Stellar Cyber cases)
     if (timelineEvents && timelineEvents.length > 0) {
@@ -1047,6 +1209,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
         }
 
         events.push({
+          id: event.id || `timeline-${eventIndex}`,
           type: eventTypeMap[event.eventType] || event.eventType,
           timestamp: new Date(event.timestamp),
           title: titleMap[event.eventType] || "Updated",
@@ -1056,34 +1219,40 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           metadata: event.metadata,
           icon: eventTypeMap[event.eventType] || "modified",
         })
+        eventIndex++
       })
     } else {
       // Fallback for cases without timeline events (shouldn't happen for Stellar Cyber, but kept for safety)
       // Case created event
       if (caseDetail?.createdAt) {
         events.push({
+          id: `created-${eventIndex}`,
           type: "created",
           timestamp: new Date(caseDetail.createdAt),
           title: "Case Created",
           description: `Created by ${caseDetail.createdByName || caseDetail.createdBy || "System"}`,
           icon: "create",
         })
+        eventIndex++
       }
 
       // Case acknowledged event
       if (caseDetail?.acknowledgedAt) {
         events.push({
+          id: `acknowledged-${eventIndex}`,
           type: "acknowledged",
           timestamp: new Date(caseDetail.acknowledgedAt),
           title: "Case Acknowledged",
           description: "Case was acknowledged",
           icon: "acknowledge",
         })
+        eventIndex++
       }
 
       // Add comments as timeline events
       comments.forEach((comment) => {
         events.push({
+          id: `comment-${comment.id || eventIndex}`,
           type: "comment",
           timestamp: new Date(comment.createdAt),
           title: "Case Updated",
@@ -1091,28 +1260,33 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           author: comment.author,
           icon: "comment",
         })
+        eventIndex++
       })
 
       // Case modified event (if different from created)
       if (caseDetail?.modifiedAt && caseDetail.modifiedAt !== caseDetail.createdAt) {
         events.push({
+          id: `modified-${eventIndex}`,
           type: "modified",
           timestamp: new Date(caseDetail.modifiedAt),
           title: "Last Modified",
           description: `Modified by ${caseDetail.modifiedByName || caseDetail.modifiedBy || "System"}`,
           icon: "modify",
         })
+        eventIndex++
       }
 
       // Case closed event
       if (caseDetail?.closedAt) {
         events.push({
+          id: `closed-${eventIndex}`,
           type: "closed",
           timestamp: new Date(caseDetail.closedAt),
           title: "Case Closed",
           description: "Case was closed",
           icon: "close",
         })
+        eventIndex++
       }
     }
 
@@ -1120,6 +1294,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
     if (!isWazuhIntegration(caseDetail?.integration) && comments.length > 0) {
       comments.forEach((comment) => {
         events.push({
+          id: `extra-comment-${comment.id || eventIndex}`,
           type: "comment",
           timestamp: new Date(comment.createdAt),
           title: "Case Comment",
@@ -1127,6 +1302,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           author: comment.author,
           icon: "comment",
         })
+        eventIndex++
       })
     }
 
@@ -1177,6 +1353,15 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                   #{caseDetail.ticketId}
                 </Badge>
               )}
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto gap-1.5 text-blue-600 border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950"
+                onClick={() => setTicketDraftOpen(true)}
+              >
+                <FileTextIcon className="h-4 w-4" />
+                Create a Ticket
+              </Button>
             </DialogTitle>
             <DialogDescription>
               {caseDetail ? `Viewing details for case: ${caseDetail.name}` : "Loading case details..."}
@@ -1226,7 +1411,11 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                               </div>
                               <div>
                                 <label className="text-sm font-medium text-muted-foreground">Assigned To</label>
-                                <p className="text-sm font-medium">{caseDetail.metadata?.qradar?.assigned_to || "Unassigned"}</p>
+                                <p className="text-sm font-medium">
+                                  {getAssigneeName(caseDetail.assignee as string | null, caseDetail.assigneeName) !== "Unassigned" 
+                                    ? getAssigneeName(caseDetail.assignee as string | null, caseDetail.assigneeName)
+                                    : (caseDetail.metadata?.qradar?.assigned_to || "Unassigned")}
+                                </p>
                               </div>
                               <div>
                                 <label className="text-sm font-medium text-muted-foreground">Categories</label>
@@ -1302,7 +1491,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                             <label className="text-sm font-medium text-muted-foreground">Tags</label>
                             <div className="flex flex-wrap gap-1 mt-1">
                               {caseDetail.tags.map((tag, index) => (
-                                <Badge key={index} variant="outline" className="text-xs">
+                                <Badge key={`tag-${index}-${tag.replace(/\s+/g, '-')}`} variant="outline" className="text-xs">
                                   <TagIcon className="h-3 w-3 mr-1" />
                                   {tag}
                                 </Badge>
@@ -1548,7 +1737,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                             </TableHeader>
                             <TableBody>
                               {alerts.map((alert, index) => (
-                                <TableRow key={alert._id || index}>
+                                <TableRow key={`alert-${alert._id || alert.id || alert.externalId}-${index}`}>
                                   <TableCell className="font-medium">{alert.alert_name || "Unknown Alert"}</TableCell>
                                   <TableCell>
                                     <Badge variant={getSeverityColor(alert.severity)}>
@@ -1638,7 +1827,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                       {caseDetail?.metadata?.case_history && caseDetail.metadata.case_history.length > 0 ? (
                         <div className="space-y-4">
                           {caseDetail.metadata.case_history.map((entry: any, index: number) => (
-                            <div key={index} className="flex gap-4 pb-4 border-b last:border-0">
+                            <div key={`history-${index}-${entry.timestamp || ''}`} className="flex gap-4 pb-4 border-b last:border-0">
                               {/* Timeline indicator */}
                               <div className="flex flex-col items-center gap-2">
                                 <div className={`w-3 h-3 rounded-full border-2 ${
@@ -1730,7 +1919,7 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
                         <ScrollArea className="h-[400px]">
                           <div className="space-y-4">
                             {getTimelineEvents().map((event, index) => (
-                              <div key={index} className="flex items-start gap-3 pb-4 border-b last:border-b-0">
+                              <div key={`${event.id}-${index}`} className="flex items-start gap-3 pb-4 border-b last:border-b-0">
                                 <div className={getEventIcon(event.type)}></div>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center justify-between gap-2">
@@ -1778,6 +1967,13 @@ export function CaseDetailDialog({ open, onOpenChange, case: caseData }: CaseDet
           )}
         </DialogContent>
       </Dialog>
+
+      <TicketDraftDialog
+        open={ticketDraftOpen}
+        onOpenChange={setTicketDraftOpen}
+        caseData={caseDetail || caseData}
+        alerts={alerts}
+      />
 
       {/* Show appropriate alert detail dialog based on integration type and alert type */}
       {isSocfortressIntegration(caseDetail?.integration) ? (

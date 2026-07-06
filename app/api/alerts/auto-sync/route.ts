@@ -43,7 +43,11 @@ export async function POST() {
         const bodyPayload: any = { integrationId: integration.id }
         if (integration.source === "wazuh") {
           bodyPayload.resetCursor = true
-          bodyPayload.hoursBack = 3
+          bodyPayload.hoursBack = 24  // Increased from 3 to 24 hours for better backlog coverage
+        } else if (integration.source === "stellar-cyber") {
+          // For Stellar Cyber, explicitly set daysBack to ensure we catch more historical alerts
+          // This helps prevent gaps in alert sync backlog
+          // Note: Header X-Days-Back is used in sync/route.ts
         }
 
         const syncResponse = await fetch(syncUrl, {

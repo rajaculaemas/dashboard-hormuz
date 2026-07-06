@@ -112,6 +112,7 @@ export function ActiveFilters({ filters, onRemoveFilter, onClearAll }: ActiveFil
       mitreTactic: "MITRE Tactic",
       mitreId: "MITRE ID",
       tags: "Tags",
+      assignee: "Assign",
     }
     return labels[columnId] || columnId
   }

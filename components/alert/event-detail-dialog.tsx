@@ -35,6 +35,18 @@ function removeNullValues(obj: any): any {
   return obj
 }
 
+// Decode a base64 string to plain text, returns null if not valid base64
+function decodeBase64(str: string): string | null {
+  try {
+    const decoded = atob(str)
+    // Validate: decoded must be printable UTF-8, not binary garbage
+    if (/[\x00-\x08\x0E-\x1F\x7F]/.test(decoded)) return null
+    return decoded
+  } catch {
+    return null
+  }
+}
+
 interface EventDetailDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -222,8 +234,12 @@ export function EventDetailDialog({ open, onOpenChange, event }: EventDetailDial
     scanObject(metadata)
 
     // Parse from payload text
-    const payloadText: string | undefined = metadata.payload || (event as any).payload
+    let payloadText: string | undefined = metadata.payload || (event as any).payload
     if (payloadText) {
+      // Convert to string if it's an object
+      if (typeof payloadText !== 'string') {
+        payloadText = JSON.stringify(payloadText)
+      }
       // Pattern: "Hashes: MD5=...,SHA256=...,IMPHASH=..."
       const match = payloadText.match(/Hashes:\s*([^\n]+)/i)
       if (match && match[1]) {
@@ -259,10 +275,12 @@ export function EventDetailDialog({ open, onOpenChange, event }: EventDetailDial
       { key: "sourceport", label: "Source Port", format: formatValue },
       { key: "sourcemac", label: "Source MAC", format: formatValue },
       { key: "sourceaddress", label: "Source Address", format: formatValue },
+      { key: "public_remote_ip", label: "Public Remote IP", format: formatValue },
       { key: "destinationip", label: "Destination IP", format: formatValue },
       { key: "destinationport", label: "Destination Port", format: formatValue },
       { key: "destinationmac", label: "Destination MAC", format: formatValue },
       { key: "destinationaddress", label: "Destination Address", format: formatValue },
+      { key: "assigned_local_ip", label: "Assigned Local IP", format: formatValue },
       { key: "eventdirection", label: "Direction", format: formatValue },
       { key: "protocol", label: "Protocol", format: formatValue },
       { key: "bytes", label: "Bytes", format: formatValue },
@@ -480,6 +498,58 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
               </Card>
             )}
 
+            {/* Payload Section — styled same as Basic Info / Network / Account & User */}
+            {(() => {
+              // event.payload is a JSON string of the full QRadar event object.
+              // The actual base64-encoded syslog is at payloadObj.payload (inner field).
+              // Also check event.metadata.payload as a fallback.
+              let decodedPayload: string | null = null
+
+              // 1) Try to parse event.payload (JSON string) → get inner .payload base64
+              if (typeof event?.payload === "string") {
+                try {
+                  const payloadObj = JSON.parse(event.payload)
+                  if (typeof payloadObj?.payload === "string") {
+                    decodedPayload = decodeBase64(payloadObj.payload)
+                    // If not valid base64, use as-is (plain text)
+                    if (!decodedPayload) decodedPayload = payloadObj.payload
+                  }
+                } catch {
+                  // event.payload itself might be the base64 string
+                  decodedPayload = decodeBase64(event.payload)
+                }
+              }
+
+              // 2) Try event.metadata.payload (base64 from raw data example)
+              if (!decodedPayload && typeof event?.metadata?.payload === "string") {
+                decodedPayload = decodeBase64(event.metadata.payload) ?? event.metadata.payload
+              }
+
+              // 3) Try event.payloadSnippet as last resort
+              if (!decodedPayload && typeof event?.payloadSnippet === "string") {
+                decodedPayload = decodeBase64(event.payloadSnippet) ?? null
+              }
+
+              if (!decodedPayload) return null
+              return (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Payload</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <div>
+                      <div className="grid grid-cols-3 gap-2 text-xs items-start">
+                        <span className="font-medium text-muted-foreground col-span-1 truncate pt-0.5">Raw Log:</span>
+                        <span className="col-span-2 font-mono break-all text-right whitespace-pre-wrap leading-relaxed">
+                          {decodedPayload}
+                        </span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })()}
+
             {/* Raw Payload Card - Show entire event object like Alert Panel */}
             <Card>
               <CardHeader className="pb-3">
@@ -489,21 +559,19 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                 <div className="bg-muted rounded-md p-3 overflow-auto max-h-[400px] border">
                   <pre className="text-xs font-mono whitespace-pre-wrap break-words text-muted-foreground leading-relaxed">
                     {(() => {
-                      // Build clean payload object from extracted fields (don't include raw payload/payloadSnippet)
+                      // Build clean payload object from extracted fields
                       const cleanEvent = { ...event }
                       
                       // Remove the raw payload fields to avoid double-escaping mess
                       delete cleanEvent.payload
                       delete cleanEvent.payloadSnippet
                       
-                      // If there's a payload field that's a JSON string, try to parse and extract key fields
+                      // Parse event.payload (JSON string of full QRadar event)
                       let payloadObj: any = {}
                       if (typeof event.payload === "string") {
                         try {
                           const parsed = JSON.parse(event.payload)
-                          // Extract useful fields from nested payload
                           if (parsed && typeof parsed === "object") {
-                            // Only include non-null fields
                             Object.keys(parsed).forEach(key => {
                               if (parsed[key] !== null && parsed[key] !== undefined && parsed[key] !== "") {
                                 payloadObj[key] = parsed[key]
@@ -512,6 +580,20 @@ Fill in the [...] sections of the template above. IMPORTANT: Your entire respons
                           }
                         } catch {
                           // If parse fails, ignore
+                        }
+                      }
+
+                      // Decode inner payloadObj.payload (base64 syslog)
+                      if (typeof payloadObj.payload === "string") {
+                        const decoded = decodeBase64(payloadObj.payload)
+                        if (decoded) payloadObj.payload = decoded
+                      }
+
+                      // Decode event.metadata.payload if present
+                      if (typeof event.metadata?.payload === "string") {
+                        const decoded = decodeBase64(event.metadata.payload)
+                        if (decoded) {
+                          payloadObj.payload = decoded
                         }
                       }
                       

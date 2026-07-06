@@ -1,0 +1,31 @@
+Dear POS Team,
+Kami menyampaikan notifikasi terkait aktivitas keamanan mencurigakan yang terdeteksi oleh SIEM, dengan detail sebagai berikut:
+
+Alert Information:
+•Case ID: 153
+•Alert Name: ESET: Critical message was logged from cakra-ndr.
+•Detected Date and Time: May 7 2026, 11:16
+•Hostname: 15400-b18331
+•Source IP: 192.168.161.171
+•Group Name: All/Kantor Pos SM 2024
+•Total Alerts: 1
+•Risk / Severity Level: Medium
+
+Alert / Incident Description: 
+Terdapat aktivitas yang berasal dari proses C:\Windows\explorer.exe mendeteksi adanya file mencurigakan .Source.lnk yang teridentifikasi sebagai malware LNK/TrojanDownloader.Agent.AXY pada endpoint dengan hostname 15400-b18331 dengan sorce IP 192.168.161.171. File tersebut terdeteksi saat sistem mencoba mengakses objek dengan path: file://///192.168.161.62/aden/CAMPUR/MULTIPRO/CCF28072021_001.pdf.lnk. Diketahui action dari antivirus tersebut berstatus Unable to clean, sehingga status threat masih belum tertangani (threat_handled: false).
+
+
+
+Risk Assessment:
+Aktivitas terindikasi sebagai LNK/Exploit.CVE-2010-2568, yaitu eksploitasi kerentanan pada file shortcut (.lnk) yang memungkinkan eksekusi perintah atau payload berbahaya saat file diakses. File .Source.lnk bukan merupakan bagian dari komponen resmi sistem Windows, sehingga keberadaannya mengindikasikan aktivitas abnormal dan berpotensi digunakan sebagai media eksekusi malware atau persistence oleh pihak tidak sah.
+
+
+Recommended Actions:
+
+1. Menghapus file file://///192.168.161.62/aden/CAMPUR/MULTIPRO/CCF28072021_001.pdf.lnk pada host terkait.
+2. Melakukan full antivirus scan pada endpoint untuk memastikan tidak ada file lain yang terinfeksi.
+
+Terima kasih atas perhatian dan kerja samanya.
+
+Best regards,
+SOC247 - Bara

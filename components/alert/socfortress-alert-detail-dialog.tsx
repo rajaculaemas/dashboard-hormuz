@@ -1,16 +1,19 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
-import { AlertTriangleIcon, ShieldCheck, Clock, Copy, CheckCircle, Database, Settings2, FileJson, Shield, Network, HardDrive, Tag, Loader2 } from "lucide-react"
+import { AlertTriangleIcon, ShieldCheck, Clock, Copy, CheckCircle, Database, Settings2, FileJson, Shield, Globe, HardDrive, Tag, Loader2, Download, FileIcon, BookOpen, Network, MessageSquare, Plus, X } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
 import { IpReputationDialog } from "@/components/alert/ip-reputation-dialog"
 import { HashReputationDialog } from "@/components/alert/hash-reputation-dialog"
+import { EscalateToL3Dialog } from "@/components/alert/escalate-to-l3-dialog"
+import { EscalationReplyDialog } from "@/components/alert/escalation-reply-dialog"
 import { AlertAnalysisSection } from "@/components/alert/alert-analysis-section"
 import { formatTimestampWithTimezone } from "@/lib/utils/timestamp"
 
@@ -19,6 +22,7 @@ interface SocfortressAlertDetailDialogProps {
   onOpenChange: (open: boolean) => void
   alert: any
   refreshTrigger?: number
+  onUpdateSuccess?: () => void
 }
 
 function CopyableField({ label, value, id }: { label: string; value: string; id: string }) {
@@ -59,6 +63,7 @@ export function SocfortressAlertDetailDialog({
   onOpenChange,
   alert,
   refreshTrigger,
+  onUpdateSuccess,
 }: SocfortressAlertDetailDialogProps) {
   const [selectedIp, setSelectedIp] = useState<string | null>(null)
   const [selectedHash, setSelectedHash] = useState<{ value: string; type: string } | null>(null)
@@ -68,13 +73,125 @@ export function SocfortressAlertDetailDialog({
   // Escalation state
   const [escalationData, setEscalationData] = useState<any>(null)
   const [escalationLoading, setEscalationLoading] = useState(false)
+  const [attachments, setAttachments] = useState<any>({})
+  const [loadingAttachments, setLoadingAttachments] = useState(false)
+  const [escalateToL3DialogOpen, setEscalateToL3DialogOpen] = useState(false)
+  const [replyDialogOpen, setReplyDialogOpen] = useState(false)
+  const [selectedResponse, setSelectedResponse] = useState<any>(null)
+  const [isClosing, setIsClosing] = useState(false)
+  const [closeError, setCloseError] = useState("")
 
-  // Fetch escalation data when alert or dialog opens
+  // Wazuh logs state
+  const [wazuhLoading, setWazuhLoading] = useState(false)
+  const [wazuhError, setWazuhError] = useState<string>("")
+  const [wazuhErrorDetail, setWazuhErrorDetail] = useState<string>("")
+  const wazuhTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Timeline events state (from AlertTimeline table)
+  const [timelineEvents, setTimelineEvents] = useState<any[]>([])
+  // Incident comments from SOCFortress incident_management_comment (authoritative source)
+  const [incidentComments, setIncidentComments] = useState<any[]>([])
+
+  // Tags management states
+  const [isEditingTags, setIsEditingTags] = useState(false)
+  const [localTags, setLocalTags] = useState<string[]>([])
+  const [newTagName, setNewTagName] = useState("")
+  const [isSavingTags, setIsSavingTags] = useState(false)
+
+  const fetchTimeline = async () => {
+    if (!alert?.id) return
+    try {
+      const res = await fetch(`/api/alerts/${alert.id}/timeline`)
+      if (res.ok) {
+        const data = await res.json()
+        setTimelineEvents(data.data || [])
+      }
+    } catch (err) {
+      console.error("Error fetching alert timeline:", err)
+    }
+  }
+
+  const fetchIncidentComments = async () => {
+    if (!alert?.id) return
+    try {
+      const res = await fetch(`/api/alerts/${alert.id}/socfortress-comments`)
+      if (res.ok) {
+        const data = await res.json()
+        setIncidentComments(data.data || [])
+      }
+    } catch (err) {
+      console.error("Error fetching SOCFortress comments:", err)
+    }
+  }
+
+  // Fetch escalation data and initialize tags when alert or dialog opens
   useEffect(() => {
     if (alert?.id) {
       fetchEscalationData()
+      fetchTimeline()
+      fetchIncidentComments()
+    }
+    if (open && alert) {
+      setLocalTags(getTagsInfo())
+      setIsEditingTags(false)
+      setNewTagName("")
     }
   }, [alert?.id, open])
+
+  // Listen for Wazuh auth popup messages
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data === 'wazuh_auth_success') {
+        console.log('[SocfortressAlertDetail] Received wazuh_auth_success from popup')
+        
+        // Clear the fallback timeout
+        if (wazuhTimeoutRef.current) {
+          clearTimeout(wazuhTimeoutRef.current)
+          wazuhTimeoutRef.current = null
+        }
+        
+        setWazuhLoading(false)
+        setWazuhError("")
+        setWazuhErrorDetail("✅ Wazuh logs opened successfully!")
+        
+        // Clear the success message after 1.5 seconds
+        setTimeout(() => {
+          setWazuhErrorDetail("")
+        }, 1500)
+      } else if (event.data === 'wazuh_auth_error') {
+        console.log('[SocfortressAlertDetail] Received wazuh_auth_error from popup')
+        
+        // Clear the fallback timeout
+        if (wazuhTimeoutRef.current) {
+          clearTimeout(wazuhTimeoutRef.current)
+          wazuhTimeoutRef.current = null
+        }
+        
+        setWazuhLoading(false)
+        setWazuhError("❌ Authentication failed")
+        setWazuhErrorDetail("Failed to authenticate with Wazuh")
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
+  const fetchAttachments = async (alertId: string, escalationId: string) => {
+    try {
+      setLoadingAttachments(true)
+      const response = await fetch(`/api/alerts/${alertId}/escalation/${escalationId}/attachments`)
+      if (response.ok) {
+        const data = await response.json()
+        setAttachments(data.attachments || {})
+      }
+    } catch (error) {
+      console.error("Error fetching attachments:", error)
+      setAttachments({})
+    } finally {
+      setLoadingAttachments(false)
+    }
+  }
 
   const fetchEscalationData = async () => {
     try {
@@ -83,6 +200,10 @@ export function SocfortressAlertDetailDialog({
       if (response.ok) {
         const data = await response.json()
         setEscalationData(data)
+        // Fetch attachments if there's an active escalation
+        if (data.active?.id) {
+          fetchAttachments(alert.id, data.active.id)
+        }
       } else {
         setEscalationData({ active: null, history: [] })
       }
@@ -91,6 +212,78 @@ export function SocfortressAlertDetailDialog({
       setEscalationData({ active: null, history: [] })
     } finally {
       setEscalationLoading(false)
+    }
+  }
+
+  const handleOpenEscalateToL3Dialog = () => {
+    setEscalateToL3DialogOpen(true)
+  }
+
+  const handleOpenWazuhLogs = async () => {
+    try {
+      setWazuhLoading(true)
+      setWazuhError("")
+      setWazuhErrorDetail("")
+
+      // Clear any pending timeout
+      if (wazuhTimeoutRef.current) {
+        clearTimeout(wazuhTimeoutRef.current)
+        wazuhTimeoutRef.current = null
+      }
+
+      // Show connecting message
+      setWazuhErrorDetail("🔄 Connecting to Wazuh...")
+
+      // Open Wazuh auth popup
+      const popup = window.open("/api/wazuh/auth/redirect", "wazuh_logs", "width=1400,height=900")
+      
+      if (!popup) {
+        setWazuhError("Popup blocked ❌")
+        setWazuhErrorDetail("Please allow popups for this site")
+        setWazuhLoading(false)
+      } else {
+        setWazuhErrorDetail("✅ Opening Wazuh logs...")
+        
+        // Fallback: clear loading state after 5 seconds if no message received
+        wazuhTimeoutRef.current = setTimeout(() => {
+          console.log('[SocfortressAlertDetail] Wazuh popup success timeout - clearing loading state')
+          setWazuhLoading(false)
+          setWazuhErrorDetail("✅ Wazuh logs opened successfully!")
+          setTimeout(() => {
+            setWazuhErrorDetail("")
+          }, 1500)
+        }, 5000)
+      }
+    } catch (error) {
+      console.error("[Wazuh Logs] Error:", error)
+      setWazuhError("Navigation failed ❌")
+      setWazuhErrorDetail(String(error))
+      setWazuhLoading(false)
+    }
+  }
+
+  const handleCloseEscalation = async () => {
+    if (!escalationData?.active?.id) return
+    try {
+      setIsClosing(true)
+      setCloseError("")
+      const response = await fetch(`/api/alerts/${alert.id}/escalation/${escalationData.active.id}/close-reopen`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "close" }),
+      })
+
+      if (response.ok) {
+        await fetchEscalationData()
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Failed to close escalation" }))
+        setCloseError(errorData.error || "Failed to close escalation")
+      }
+    } catch (error) {
+      console.error("[Socfortress Detail] Error closing escalation:", error)
+      setCloseError("Failed to close escalation")
+    } finally {
+      setIsClosing(false)
     }
   }
 
@@ -381,6 +574,27 @@ export function SocfortressAlertDetailDialog({
               </div>
               <div className="text-lg font-semibold break-words">{alertName}</div>
             </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2 flex-shrink-0"
+              onClick={() => {
+                const ctx = [
+                  `Tolong analisis alert SOCFortress berikut dari integrasi ${alert.integration?.name || "Copilot/SOCFortress"}:`,
+                  `- Alert: ${alertName}`,
+                  `- Alert ID: ${alertId}`,
+                  `- Severity: ${severity}`,
+                  `- Status: ${status}`,
+                  timestamp ? `- Time: ${new Date(alert.timestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}` : null,
+                  description ? `- Description: ${String(description).substring(0, 300)}` : null,
+                ].filter(Boolean).join("\n")
+                localStorage.setItem("soc_alert_context", ctx)
+                window.open("/dashboard/chat", "_blank")
+              }}
+            >
+              <MessageSquare className="h-4 w-4" />
+              Ask SOC GPT
+            </Button>
           </DialogTitle>
         </DialogHeader>
 
@@ -556,6 +770,50 @@ export function SocfortressAlertDetailDialog({
                 </CardContent>
               </Card>
             )}
+
+            {/* Investigation Section - Wazuh Logs for Socfortress alerts */}
+            <Separator />
+            <div>
+              <label className="text-sm font-medium text-muted-foreground mb-2 block">Investigation</label>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleOpenWazuhLogs}
+                  disabled={wazuhLoading}
+                  className="gap-2"
+                  title="Open Wazuh Logs (auto-login)"
+                >
+                  {wazuhLoading ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    <>
+                      <Globe className="h-3.5 w-3.5" />
+                      Log Explorer
+                    </>
+                  )}
+                </Button>
+              </div>
+              {wazuhError && (
+                <div className="mt-2 p-3 rounded border border-yellow-200 bg-yellow-50">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1">
+                      <p className="text-xs font-medium text-yellow-800">
+                        {wazuhError}
+                      </p>
+                      {wazuhErrorDetail && (
+                        <p className="text-xs text-yellow-700 mt-1">
+                          {wazuhErrorDetail}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Agent Information - Only show if from Wazuh event */}
             {(agentInfo.agentId || agentInfo.agentName || Object.keys(agentInfo).length > 0) && (
@@ -832,22 +1090,248 @@ export function SocfortressAlertDetailDialog({
             )}
 
             {/* Tags */}
-            {tags && tags.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Alert Tags</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                    {tags.map((tag: string, idx: number) => (
-                      <Badge key={idx} variant="outline" className="px-3 py-1 text-sm">
-                        {tag}
-                      </Badge>
-                    ))}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Tag className="h-4 w-4" />
+                  Alert Tags
+                </CardTitle>
+                <div className="flex gap-2">
+                  {isEditingTags ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 px-3 text-xs"
+                        disabled={isSavingTags}
+                        onClick={() => {
+                          setLocalTags(getTagsInfo())
+                          setIsEditingTags(false)
+                          setNewTagName("")
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="h-8 px-3 text-xs gap-1"
+                        disabled={isSavingTags}
+                        onClick={async () => {
+                          setIsSavingTags(true)
+                          try {
+                            const originalTags = getTagsInfo()
+                            const tagsToAdd = localTags.filter(t => !originalTags.includes(t))
+                            const tagsToDelete = originalTags.filter(t => !localTags.includes(t))
+                            
+                            if (tagsToAdd.length === 0 && tagsToDelete.length === 0) {
+                              setIsEditingTags(false)
+                              setIsSavingTags(false)
+                              return
+                            }
+                            
+                            const payload = {
+                              status: alert.status, // Current status to satisfy API requirement
+                              tagsToAdd,
+                              tagsToDelete,
+                            }
+                            
+                            const response = await fetch(`/api/alerts/${alert.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify(payload),
+                            })
+                            
+                            if (!response.ok) {
+                              const errData = await response.json()
+                              throw new Error(errData.error || "Failed to update tags")
+                            }
+                            
+                            // Update local metadata in the alert object so UI updates immediately
+                            if (alert.metadata) {
+                              alert.metadata.tags = localTags
+                              if (alert.metadata.socfortress) {
+                                alert.metadata.socfortress.tags = localTags.map(t => ({ tag: t }))
+                              }
+                            }
+                            
+                            setIsEditingTags(false)
+                            if (onUpdateSuccess) {
+                              onUpdateSuccess()
+                            }
+                          } catch (err) {
+                            console.error("Error saving tags:", err)
+                            window.alert("Failed to save tags: " + (err instanceof Error ? err.message : String(err)))
+                          } finally {
+                            setIsSavingTags(false)
+                          }
+                        }}
+                      >
+                        {isSavingTags && <Loader2 className="h-3 w-3 animate-spin" />}
+                        Save
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-3 text-xs"
+                      onClick={() => setIsEditingTags(true)}
+                    >
+                      Edit Tags
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {isEditingTags ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 min-h-[36px] p-2 border rounded-md bg-muted/20">
+                      {localTags.length > 0 ? (
+                        localTags.map((tag: string, idx: number) => (
+                          <Badge key={idx} variant="secondary" className="px-2 py-0.5 text-xs flex items-center gap-1">
+                            {tag}
+                            <button
+                              type="button"
+                              onClick={() => setLocalTags(prev => prev.filter(t => t !== tag))}
+                              className="rounded-full hover:bg-muted p-0.5"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-xs text-muted-foreground self-center px-1">No tags yet.</span>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Type a new tag name..."
+                        value={newTagName}
+                        onChange={(e) => setNewTagName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault()
+                            const trimmed = newTagName.trim()
+                            if (trimmed && !localTags.includes(trimmed)) {
+                              setLocalTags(prev => [...prev, trimmed])
+                            }
+                            setNewTagName("")
+                          }
+                        }}
+                        className="h-8 text-sm"
+                        disabled={isSavingTags}
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="h-8 px-3"
+                        disabled={isSavingTags || !newTagName.trim()}
+                        onClick={() => {
+                          const trimmed = newTagName.trim()
+                          if (trimmed && !localTags.includes(trimmed)) {
+                            setLocalTags(prev => [...prev, trimmed])
+                          }
+                          setNewTagName("")
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5 mr-1" />
+                        Add
+                      </Button>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-muted-foreground">Presets:</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {["True Positive", "Benign True Positive", "False Positive"].map((preset) => {
+                          const isAlreadyAdded = localTags.includes(preset)
+                          return (
+                            <Button
+                              key={preset}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2.5 text-xs rounded-full"
+                              disabled={isSavingTags || isAlreadyAdded}
+                              onClick={() => setLocalTags(prev => [...prev, preset])}
+                            >
+                              {preset}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            )}
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {localTags.length > 0 ? (
+                      localTags.map((tag: string, idx: number) => (
+                        <Badge key={idx} variant="outline" className="px-3 py-1 text-sm bg-muted/40">
+                          {tag}
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-sm text-muted-foreground">No tags assigned.</span>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Comments */}
+            {(() => {
+              // Primary source: incident_management_comment from SOCFortress MySQL (actual text, all comments)
+              // This is authoritative — same data whether updated via our app or SOCFortress UI directly.
+              const mysqlComments = incidentComments.map((c: any) => ({
+                key: `mysql-${c.id}`,
+                author: c.user_name || "Unknown",
+                text: c.comment || "—",
+                at: c.created_at,
+              }))
+
+              // Fallback: AlertTimeline (our local DB) — used for comments not yet synced from MySQL
+              // or when MySQL connection is unavailable. Deduplicate against mysqlComments by text.
+              const mysqlCommentTexts = new Set(mysqlComments.map((c: any) => c.text))
+              const localComments = timelineEvents
+                .filter((e: any) => e.eventType === "comment")
+                .filter((e: any) => !mysqlCommentTexts.has(e.description || ""))
+                .map((e: any) => ({
+                  key: e.id,
+                  author: e.changedByUser?.name || e.changedBy || "Unknown",
+                  text: e.description || "—",
+                  at: e.timestamp,
+                }))
+
+              const allComments = [...mysqlComments, ...localComments].sort(
+                (a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime(),
+              )
+              if (allComments.length === 0) return null
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <MessageSquare className="h-4 w-4" />
+                      Comments ({allComments.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {allComments.map((c) => (
+                      <div key={c.key} className="rounded-md border bg-muted/30 p-3 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold">{c.author}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {c.at ? formatTimestampWithTimezone(new Date(c.at)) : "—"}
+                          </span>
+                        </div>
+                        <p className="text-sm whitespace-pre-wrap break-words">{c.text}</p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )
+            })()}
 
             {/* Analyses */}
             <AlertAnalysisSection alertId={dbId} integrationId={integrationId} refreshTrigger={refreshTrigger} />
@@ -1001,6 +1485,43 @@ export function SocfortressAlertDetailDialog({
                           </div>
                         </div>
                       )}
+
+                      {/* Action Buttons */}
+                      <div className="mt-4 pt-4 border-t space-y-2">
+                        {(escalationData.active.status === "replied" || escalationData.active.status === "escalated") && escalationData.active.escalationLevel === 1 && (
+                          <>
+                            <p className="text-xs font-medium text-muted-foreground mb-2">Need further help?</p>
+                            <Button
+                              size="sm"
+                              className="w-full gap-2"
+                              onClick={handleOpenEscalateToL3Dialog}
+                              disabled={escalationLoading}
+                            >
+                              🚀 Escalate to L3
+                            </Button>
+                          </>
+                        )}
+                        {!escalationData.active.closedAt && (
+                          <>
+                            {closeError && (
+                              <div className="flex items-start gap-2 p-2 bg-destructive/10 border border-destructive/20 rounded text-xs text-destructive">
+                                <AlertTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                                <p>{closeError}</p>
+                              </div>
+                            )}
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => handleCloseEscalation()}
+                              disabled={isClosing}
+                              className="w-full"
+                            >
+                              {isClosing ? "Closing..." : "🔒 Close Escalation"}
+                            </Button>
+                            <p className="text-xs text-muted-foreground">Closing will stop further escalation activity unless reopened later.</p>
+                          </>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 )}
@@ -1067,21 +1588,83 @@ export function SocfortressAlertDetailDialog({
                             </div>
                           )}
 
+                          {/* Attachments */}
+                          {escalationData?.active?.id === escalation.id && Object.keys(attachments).length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              <p className="text-xs text-muted-foreground font-medium">📎 Attachments ({Object.values(attachments).flat().length})</p>
+                              {Object.entries(attachments).map(([level, files]: [string, any]) =>
+                                files?.length > 0 ? (
+                                  <div key={level}>
+                                    <p className="text-[10px] font-semibold text-gray-600 uppercase mb-1">{level} Attachments</p>
+                                    <div className="space-y-1">
+                                      {files.map((file: any) => (
+                                        <div
+                                          key={file.id}
+                                          className="flex items-center justify-between gap-2 bg-gray-50 p-1.5 rounded border border-gray-200 hover:bg-gray-100 transition text-xs"
+                                        >
+                                          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                                            {file.fileType === "text" ? (
+                                              <FileIcon className="h-3 w-3 text-blue-500 flex-shrink-0" />
+                                            ) : (
+                                              <FileIcon className="h-3 w-3 text-green-500 flex-shrink-0" />
+                                            )}
+                                            <div className="min-w-0 flex-1">
+                                              <p className="font-medium truncate">{file.fileName}</p>
+                                              <p className="text-[9px] text-gray-500">
+                                                {(file.fileSize / 1024).toFixed(1)} KB
+                                                {file.sentToTelegram && " • ✓ Sent to Telegram"}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          <a
+                                            href={file.fileUrl}
+                                            download={file.fileName}
+                                            className="flex-shrink-0"
+                                            title="Download file"
+                                          >
+                                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                              <Download className="h-3 w-3" />
+                                            </Button>
+                                          </a>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null
+                              )}
+                            </div>
+                          )}
+
                           {/* Responses */}
                           {escalation.responses && escalation.responses.length > 0 && (
                             <div className="mt-3 space-y-2">
                               <p className="text-xs text-muted-foreground font-medium">Responses:</p>
                               {escalation.responses.map((response: any, ridx: number) => (
                                 <div key={response.id} className="text-sm bg-blue-50 p-2 rounded border border-blue-200">
-                                  <div className="flex justify-between items-start">
-                                    <div>
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div className="flex-1">
                                       <div className="font-medium text-blue-900">{response.responder?.name || "Unknown"}</div>
                                       <div className="text-blue-800">{response.analysis}</div>
                                     </div>
-                                    <Badge className="text-xs">{response.conclusion || response.action}</Badge>
+                                    <Badge className="text-xs flex-shrink-0">{response.conclusion || response.action}</Badge>
                                   </div>
-                                  <div className="text-xs text-blue-700 mt-1">
-                                    {formatTimestampWithTimezone(response.createdAt)}
+                                  <div className="flex justify-between items-center mt-2">
+                                    <div className="text-xs text-blue-700">
+                                      {formatTimestampWithTimezone(response.createdAt)}
+                                    </div>
+                                    {response.conclusion !== "L1_REPLY" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-xs h-6"
+                                        onClick={() => {
+                                          setSelectedResponse(response)
+                                          setReplyDialogOpen(true)
+                                        }}
+                                      >
+                                        Reply
+                                      </Button>
+                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -1196,6 +1779,34 @@ export function SocfortressAlertDetailDialog({
           onOpenChange={setHashDialogOpen}
           hash={selectedHash.value}
           type={selectedHash.type}
+        />
+      )}
+
+      {/* L3 Escalation Dialog */}
+      {open && escalationData?.active && (
+        <EscalateToL3Dialog
+          open={escalateToL3DialogOpen}
+          onOpenChange={setEscalateToL3DialogOpen}
+          escalationId={escalationData.active.id}
+          alertId={alert.id}
+          onSuccess={fetchEscalationData}
+        />
+      )}
+
+      {/* Escalation Reply Dialog */}
+      {selectedResponse && (
+        <EscalationReplyDialog
+          open={replyDialogOpen}
+          onOpenChange={setReplyDialogOpen}
+          alertId={alert.id}
+          escalationId={escalationData?.active?.id}
+          respondentName={selectedResponse.responder?.name || "Unknown"}
+          originalAnalysis={selectedResponse.analysis}
+          onReplySuccess={() => {
+            setReplyDialogOpen(false)
+            setSelectedResponse(null)
+            fetchEscalationData()
+          }}
         />
       )}
     </Dialog>

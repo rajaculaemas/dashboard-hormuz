@@ -100,11 +100,12 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         const creds = case_.integration.credentials as any
         const host = creds.host || creds.HOST || creds.host_name || creds.hostname
         const apiKey = creds.api_key || creds.apiKey || creds.api_key
+        const domainId = creds.domain_id ? Number(creds.domain_id) : undefined
 
         if (!host || !apiKey) {
           console.warn(`[${requestId}] QRadar credentials missing for integration ${case_.integration.id}`)
         } else {
-          const qradarClient = new QRadarClient({ host, api_key: apiKey })
+          const qradarClient = new QRadarClient({ host, api_key: apiKey, domain_id: domainId })
           // Determine offenseId: prefer metadata.qradar.id, then case_.externalId
           let offenseId = NaN
           try {
@@ -537,11 +538,12 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         const creds = updatedCase.integration.credentials as any
         const host = creds.host || creds.HOST || creds.host_name || creds.hostname
         const apiKey = creds.api_key || creds.apiKey || creds.api_key
+        const domainId = creds.domain_id ? Number(creds.domain_id) : undefined
 
         if (!host || !apiKey) {
           console.warn(`QRadar credentials missing for integration ${updatedCase.integration.id}`)
         } else {
-          const qradarClient = new QRadarClient({ host, api_key: apiKey })
+          const qradarClient = new QRadarClient({ host, api_key: apiKey, domain_id: domainId })
           const offenseId = Number(updatedCase.externalId)
           if (!isNaN(offenseId)) {
             // Only support closing from ticketing UI for QRadar

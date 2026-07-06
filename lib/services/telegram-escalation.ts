@@ -27,14 +27,11 @@ export class TelegramEscalationService {
     options: RequestInit,
     maxRetries: number = 2,
   ): Promise<Response> {
-    const delays = [1000, 2000, 4000] // 1s, 2s, 4s
+    const delays = [500, 1000, 2000] // 0.5s, 1s, 2s
     
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const response = await fetch(url, {
-          ...options,
-          timeout: 40000, // 40s timeout
-        })
+        const response = await fetch(url, options)
         return response
       } catch (error) {
         if (attempt < maxRetries) {
@@ -54,6 +51,7 @@ export class TelegramEscalationService {
     chatId: string,
     alert: any,
     escalationLevel: number,
+    escalationId: string, // Unique escalation ID for callback button
     previousAnalyses: {
       l1?: string
       l2?: string
@@ -82,7 +80,7 @@ export class TelegramEscalationService {
             chat_id: chatId,
             text: messageText,
             parse_mode: "HTML",
-            reply_markup: this.getReplyMarkup(escalationLevel),
+            reply_markup: this.getReplyMarkup(escalationLevel, escalationId),
           }),
         },
         2, // max retries
@@ -223,47 +221,55 @@ Review the analysis and take appropriate action
     const levelText = escalationLevel === 1 ? "L2" : "L3"
     const fromLevel = escalationLevel === 1 ? "L1" : "L2"
 
-    let message = `<b>📌 ALERT ESCALATION - ${fromLevel} → ${levelText}</b>\n\n`
-    message += `<b>Alert ID:</b> <code>${alert.externalId}</code>\n`
-    message += `<b>Title:</b> ${alert.title}\n`
+    // Determine source from alert
+    let source = "Unknown"
+    if (alert.integration?.name) {
+      source = alert.integration.name
+    } else if (alert.source) {
+      source = alert.source
+    } else if (alert.metadata?.integration) {
+      source = alert.metadata.integration
+    }
+
+    let message = `<b>� ALERT ESCALATION</b> <b>${fromLevel}</b> → <b>${levelText}</b>\n\n`
+    message += `<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n`
+    message += `<b>Alert ID:</b>\n<code>${alert.externalId}</code>\n\n`
+    message += `<b>Title:</b>\n${alert.title}\n\n`
     message += `<b>Severity:</b> <b>${alert.severity || "Unknown"}</b>\n`
-    message += `<b>Source:</b> Socfortress\n\n`
+    message += `<b>Source:</b> ${source}\n\n`
+    message += `<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n`
 
     // Show analysis from L1 if escalating to L2
     if (escalationLevel === 1 && previousAnalyses.l1) {
-      message += `<b>─────────────────────────────</b>\n`
-      message += `<b>📋 L1 ANALYSIS:</b>\n`
-      message += `${this.truncateText(previousAnalyses.l1, 500)}\n\n`
+      message += `<b>📋 L1 Analysis:</b>\n`
+      message += `<i>${this.truncateText(previousAnalyses.l1, 500)}</i>\n\n`
+      message += `<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n`
     }
 
     // Show analysis from both L1 and L2 if escalating to L3
     if (escalationLevel === 2) {
       if (previousAnalyses.l1) {
-        message += `<b>─────────────────────────────</b>\n`
-        message += `<b>📋 L1 ANALYSIS:</b>\n`
-        message += `${this.truncateText(previousAnalyses.l1, 300)}\n\n`
+        message += `<b>📋 L1 Analysis:</b>\n`
+        message += `<i>${this.truncateText(previousAnalyses.l1, 300)}</i>\n\n`
       }
 
       if (previousAnalyses.l2) {
-        message += `<b>─────────────────────────────</b>\n`
-        message += `<b>📋 L2 ANALYSIS:</b>\n`
-        message += `${this.truncateText(previousAnalyses.l2, 300)}\n\n`
+        message += `<b>📋 L2 Analysis:</b>\n`
+        message += `<i>${this.truncateText(previousAnalyses.l2, 300)}</i>\n\n`
       }
+      message += `<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n`
     }
 
-    message += `<b>─────────────────────────────</b>\n`
-    message += `<b>💬 How to respond:</b>\n`
-    message += `1. Analyze the alert\n`
-    message += `2. Reply to this message with your analysis\n`
-    message += `3. Use format:\n`
-    message += `   <code>ANALYSIS: [your detailed analysis]\n`
-    message += `   CONCLUSION: [verdict]</code>\n\n`
+    message += `<b>💬 Your Response Required:</b>\n`
+    message += `Reply to this message with your analysis in this format:\n\n`
+    message += `<code>ANALYSIS: [your detailed findings]</code>\n`
+    message += `<code>CONCLUSION: [your verdict/decision]</code>\n\n`
 
     if (escalationLevel === 2) {
-      message += `<i>Optional: If you need further help, reply with "ESCALATE_L3" in your message</i>\n\n`
+      message += `<i>💡 If you need further escalation to L3, include "ESCALATE_L3" in your response</i>\n\n`
     }
 
-    message += `⏱️ <b>Response required within 30 minutes</b>`
+    message += `⏱️ <b>Respond within 30 minutes</b>`
 
     return message
   }
@@ -271,13 +277,13 @@ Review the analysis and take appropriate action
   /**
    * Get inline keyboard markup for escalation buttons
    */
-  private static getReplyMarkup(escalationLevel: number) {
+  private static getReplyMarkup(escalationLevel: number, escalationId: string) {
     // Create inline keyboard with response options
     const buttons = [
       [
         {
-          text: "📝 Reply with Analysis",
-          callback_data: `reply_esc_${escalationLevel}`,
+          text: "💬 Reply Analysis",
+          callback_data: `reply_esc_${escalationId}`,
         },
       ],
     ]
@@ -367,7 +373,7 @@ Your response buttons are now disabled.`
     error?: string
   } {
     try {
-      // Valid verdicts
+      // Valid verdicts for old format
       const validVerdicts = [
         "TRUE POSITIVE",
         "BENIGN TRUE POSITIVE",
@@ -375,36 +381,73 @@ Your response buttons are now disabled.`
         "ESCALATE_L3",
       ]
 
-      // Extract ANALYSIS section
-      const analysisMatch = message.match(/ANALYSIS:\s*([\s\S]*?)(?=CONCLUSION:|$)/i)
-      if (!analysisMatch) {
-        return {
-          error: "Missing ANALYSIS section. Please provide format:\nANALYSIS: [your text]\nCONCLUSION: [verdict]",
+      const trimmedMessage = message.trim()
+      let analysis = ""
+      let conclusion = ""
+      let shouldEscalate = false
+
+      // Check for old format with ANALYSIS: and CONCLUSION:
+      const hasOldFormat = /ANALYSIS:|CONCLUSION:/i.test(trimmedMessage)
+
+      if (hasOldFormat) {
+        // Try to extract old format
+        const analysisMatch = trimmedMessage.match(/ANALYSIS:\s*([\s\S]*?)(?=CONCLUSION:|$)/i)
+        if (!analysisMatch) {
+          return {
+            error: "Missing ANALYSIS section. Please provide format:\nANALYSIS: [your text]\nCONCLUSION: [verdict]",
+          }
         }
-      }
 
-      let analysis = analysisMatch[1].trim()
-      // Remove surrounding brackets if present
-      analysis = analysis.replace(/^\[/, "").replace(/\]$/, "").trim()
+        analysis = analysisMatch[1].trim().replace(/^\[/, "").replace(/\]$/, "").trim()
 
-      // Extract CONCLUSION section
-      const conclusionMatch = message.match(/CONCLUSION:\s*\[?(.*?)\]?\s*(?:\n|$)/i)
-      if (!conclusionMatch) {
-        return {
-          error: "Missing CONCLUSION section. Please provide format:\nANALYSIS: [your text]\nCONCLUSION: [verdict]\n\nValid verdicts: TRUE POSITIVE, BENIGN TRUE POSITIVE, FALSE_POSITIVE, ESCALATE_L3",
+        const conclusionMatch = trimmedMessage.match(/CONCLUSION:\s*\[?(.*?)\]?\s*(?:\n|$)/i)
+        if (!conclusionMatch) {
+          return {
+            error: "Missing CONCLUSION section. Please provide format:\nANALYSIS: [your text]\nCONCLUSION: [verdict]\n\nValid verdicts: TRUE POSITIVE, BENIGN TRUE POSITIVE, FALSE_POSITIVE, ESCALATE_L3",
+          }
         }
-      }
 
-      let conclusion = conclusionMatch[1]
-        .trim()
-        .replace(/[\[\]]/g, "")
-        .toUpperCase()
+        conclusion = conclusionMatch[1]
+          .trim()
+          .replace(/[\[\]]/g, "")
+          .toUpperCase()
 
-      // Validate verdict
-      if (!validVerdicts.includes(conclusion)) {
-        return {
-          error: `Invalid verdict: "${conclusion}"\n\nValid options:\n• TRUE POSITIVE\n• BENIGN TRUE POSITIVE\n• FALSE_POSITIVE\n• ESCALATE_L3`,
+        // Validate verdict
+        if (!validVerdicts.includes(conclusion)) {
+          return {
+            error: `Invalid verdict: "${conclusion}"\n\nValid options:\n• TRUE POSITIVE\n• BENIGN TRUE POSITIVE\n• FALSE_POSITIVE\n• ESCALATE_L3`,
+          }
         }
+
+        shouldEscalate = conclusion === "ESCALATE_L3"
+      } else {
+        // NEW FORMAT: Accept any text as analysis (simple reply)
+        // Check for escalation keywords
+        const escalationKeywords = ["escalate", "l3", "escalate to l3", "needs l3"]
+        shouldEscalate = escalationKeywords.some(keyword =>
+          trimmedMessage.toLowerCase().includes(keyword)
+        )
+
+        // Use the entire message as analysis if no escalation keywords
+        // Or extract the actual analysis from the message
+        if (shouldEscalate) {
+          // Remove escalation keywords from analysis
+          analysis = trimmedMessage
+            .replace(/escalate.*l3/gi, "")
+            .replace(/needs.*l3/gi, "")
+            .trim()
+          
+          // If only escalation keyword was said, provide a default message
+          if (!analysis || analysis.length < 3) {
+            analysis = "Escalating to L3 for further investigation"
+          }
+        } else {
+          // Just use the message as analysis
+          analysis = trimmedMessage
+        }
+
+        // Don't require verdict in new format
+        conclusion = shouldEscalate ? "ESCALATE_L3" : ""
       }
 
       if (!analysis || analysis.length < 3) {
@@ -415,13 +458,59 @@ Your response buttons are now disabled.`
 
       return {
         analysis,
-        conclusion,
-        shouldEscalate: conclusion === "ESCALATE_L3",
+        conclusion: conclusion || undefined,
+        shouldEscalate,
       }
     } catch (error) {
       return {
-        error: "Error parsing response. Please use format:\nANALYSIS: [your analysis]\nCONCLUSION: [verdict]",
+        error: "Error parsing response. Please provide your analysis as simple text or use format:\nANALYSIS: [your analysis]\nCONCLUSION: [verdict]",
       }
+    }
+  }
+
+  /**
+   * Send a general notification (not escalation related)
+   * Used for shift recaps, alerts, etc.
+   */
+  static async sendNotification(
+    chatId: string,
+    message: string,
+    parseMode: "HTML" | "Markdown" | "MarkdownV2" = "Markdown",
+  ): Promise<string> {
+    try {
+      if (!TELEGRAM_BOT_TOKEN) {
+        throw new Error("Telegram bot not configured")
+      }
+
+      if (!chatId) {
+        throw new Error("Chat ID not provided")
+      }
+
+      const response = await this.fetchWithRetry(
+        `${TELEGRAM_API_URL}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: message,
+            parse_mode: parseMode,
+          }),
+        },
+        2, // max retries
+      )
+
+      const data = (await response.json()) as any
+
+      if (!data.ok) {
+        throw new Error(`Telegram API error: ${data.description}`)
+      }
+
+      // Return message ID for tracking
+      return data.result.message_id.toString()
+    } catch (error) {
+      console.error("[Telegram] Failed to send notification:", error)
+      throw error
     }
   }
 }

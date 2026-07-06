@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { AlertTriangleIcon, UserIcon, SaveIcon, XIcon } from "lucide-react"
+import { AlertTriangleIcon, UserIcon, SaveIcon, XIcon, PencilIcon } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { SocfortressCaseUpdateDialog } from "@/components/case/socfortress-case-update-dialog"
 
@@ -64,6 +64,7 @@ export const QRADAR_ASSIGNEES = [
   { id: "soc_analyst", name: "SOC Analyst" },
   { id: "soc247", name: "SOC247" },
   { id: "socntt", name: "SOCNTT" },
+  { id: "sultan", name: "Sultan" },
 ]
 
 const STATUSES = [
@@ -83,8 +84,10 @@ const SEVERITIES = [
 
 export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate }: CaseActionDialogProps) {
   const [updates, setUpdates] = useState<CaseUpdate>({})
+  const [title, setTitle] = useState("")
   const [comment, setComment] = useState("")
   const [loading, setLoading] = useState(false)
+  const [showEditTitle, setShowEditTitle] = useState(false)
   const [closingReasons, setClosingReasons] = useState<Array<{ id: number; text: string }>>([])
   const [selectedClosingReason, setSelectedClosingReason] = useState<number | null>(null)
   const [appUsers, setAppUsers] = useState<Array<{ id: string; name: string }>>([])
@@ -96,12 +99,14 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
       console.log("[CaseActionDialog] Integration source:", caseData.integration?.source)
       // Reset form when dialog opens
       setUpdates({})
+      setTitle(caseData.name || "")
       setComment("")
       setSelectedClosingReason(null)
+      setShowEditTitle(false)
 
-      // If this is a Wazuh ticket, fetch app users
-      if (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh")) {
-        console.log("[CaseActionDialog] Wazuh case detected, fetching app users")
+      // Fetch app users for Wazuh and QRadar local cases
+      if (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh") || caseData.integration?.source === "qradar") {
+        console.log("[CaseActionDialog] Fetching app users")
         ;(async () => {
           try {
             const resp = await fetch("/api/users")
@@ -116,7 +121,10 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
             console.error("[CaseActionDialog] Failed to fetch app users:", err)
           }
         })()
-      } else if (caseData.integration?.source === "qradar") {
+      }
+
+      // For QRadar, also fetch closing reasons
+      if (caseData.integration?.source === "qradar") {
         console.log("[CaseActionDialog] QRadar case detected, fetching closing reasons")
         console.log("[CaseActionDialog] caseData.integrationId:", caseData.integrationId)
         console.log("[CaseActionDialog] caseData.integration?.id:", caseData.integration?.id)
@@ -151,7 +159,7 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
     if (!caseData) return
 
     // Check if there are any changes
-    const hasChanges = Object.keys(updates).length > 0 || comment.trim()
+    const hasChanges = Object.keys(updates).length > 0 || comment.trim() || (title?.trim() !== (caseData.name || ""))
 
     if (!hasChanges) {
       toast({
@@ -178,6 +186,7 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
       const updateData: any = {
         ...updates,
         comment: comment.trim() || undefined,
+        ...(title?.trim() && title?.trim() !== (caseData.name || "") && { name: title.trim() }),
       }
 
       // Include integration source info for backend routing
@@ -197,35 +206,66 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
       let data
 
       if (caseData.integration?.source === "qradar") {
-        // For QRadar, update the underlying alert via the alerts PATCH endpoint
-        const body: any = {
-          status: updates.status || caseData.status,
-          comments: updateData.comment,
-          isQRadar: true,
-        }
+        // Check if this is a new QRadar case (externalId is numeric like "0001")
+        // vs old alert-based case (externalId would be like "QRADAR-{id}")
+        const isNewQRadarCase = /^\d+$/.test(caseData.externalId)
+        
+        if (isNewQRadarCase) {
+          // New QRadar case - use /api/qradar/cases endpoint
+          const body: any = {
+            ...(updates.status && { status: updates.status }),
+            ...(updates.assignee && { assigneeId: updates.assignee }),
+            ...(updates.severity && { severity: updates.severity }),
+            ...(updateData.name && { name: updateData.name }),
+            ...(updateData.comment && { notes: updateData.comment }),
+          }
 
-        if (updates.assignee) {
-          body.assignedTo = updates.assignee
-        }
+          response = await fetch(`/api/qradar/cases/${caseData.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
 
-        if (updates.status === "Closed" && selectedClosingReason) {
-          body.closingReasonId = selectedClosingReason
-        }
+          data = await response.json()
 
-        response = await fetch(`/api/alerts/${caseData.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        })
-
-        data = await response.json()
-
-        if (data.success) {
-          toast({ title: "Alert Updated", description: "The QRadar alert was updated." })
-          onUpdate()
-          onOpenChange(false)
+          if (response.ok) {
+            toast({ title: "Case Updated", description: "The QRadar case was updated." })
+            onUpdate()
+            onOpenChange(false)
+          } else {
+            toast({ title: "Update Failed", description: data.error || "Failed to update case", variant: "destructive" })
+          }
         } else {
-          toast({ title: "Update Failed", description: data.error || "Failed to update alert", variant: "destructive" })
+          // Old alert-based QRadar case - use /api/alerts endpoint
+          const body: any = {
+            status: updates.status || caseData.status,
+            comments: updateData.comment,
+            isQRadar: true,
+          }
+
+          if (updates.assignee) {
+            body.assignedTo = updates.assignee
+          }
+
+          if (updates.status === "Closed" && selectedClosingReason) {
+            body.closingReasonId = selectedClosingReason
+          }
+
+          response = await fetch(`/api/alerts/${caseData.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
+
+          data = await response.json()
+
+          if (data.success) {
+            toast({ title: "Alert Updated", description: "The QRadar alert was updated." })
+            onUpdate()
+            onOpenChange(false)
+          } else {
+            toast({ title: "Update Failed", description: data.error || "Failed to update alert", variant: "destructive" })
+          }
         }
       } else {
         response = await fetch(`/api/cases/${caseData.id}`, {
@@ -262,8 +302,12 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
   const getChangeSummary = () => {
     const changes: string[] = []
 
+    if (title?.trim() && title?.trim() !== (caseData?.name || "")) {
+      changes.push(`Title: "${caseData?.name || "No name"}" → "${title.trim()}"`)
+    }
+
     if (updates.status && updates.status !== caseData?.status) {
-      changes.push(`Status: ${caseData?.status} ? ${updates.status}`)
+      changes.push(`Status: ${caseData?.status} → ${updates.status}`)
     }
 
     if (updates.assignee && updates.assignee !== caseData?.assignee) {
@@ -324,21 +368,19 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
               <CardTitle className="text-lg">Current Case Information</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className={`grid gap-4 ${caseData.integration?.source === "qradar" ? "grid-cols-2" : "grid-cols-3"}`}>
+              <div className="grid gap-4 grid-cols-3">
                 <div>
                   <Label className="text-sm font-medium text-muted-foreground">Status</Label>
                   <Badge variant={getStatusColor(caseData.status)} className="mt-1">
                     {caseData.status}
                   </Badge>
                 </div>
-                {caseData.integration?.source !== "qradar" && (
-                  <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Severity</Label>
-                    <Badge variant={getSeverityColor(caseData.severity)} className="mt-1">
-                      {caseData.severity}
-                    </Badge>
-                  </div>
-                )}
+                <div>
+                  <Label className="text-sm font-medium text-muted-foreground">Severity</Label>
+                  <Badge variant={getSeverityColor(caseData.severity)} className="mt-1">
+                    {caseData.severity}
+                  </Badge>
+                </div>
                 <div>
                   <Label className="text-sm font-medium text-muted-foreground">Assignee</Label>
                   <div className="flex items-center gap-2 mt-1">
@@ -347,27 +389,58 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                   </div>
                 </div>
               </div>
+              {caseData.mttrMinutes !== undefined && caseData.mttrMinutes !== null && (
+                <div className="grid gap-4 grid-cols-3 pt-2 border-t">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">MTTR</Label>
+                    <p className="text-sm mt-1 font-semibold">{caseData.mttrMinutes} minutes</p>
+                  </div>
+                </div>
+              )}
               <div>
                 <Label className="text-sm font-medium text-muted-foreground">Case Name</Label>
-                <p className="text-sm mt-1">{caseData.name}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-sm">{caseData.name}</p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowEditTitle(!showEditTitle)}
+                    className="h-6 w-6 p-0"
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                  </Button>
+                </div>
+                {showEditTitle && (
+                  <div className="mt-3 pt-3 border-t space-y-2">
+                    <Label htmlFor="title">Edit Case Name</Label>
+                    <input
+                      id="title"
+                      type="text"
+                      placeholder="Enter new case name"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-600"
+                    />
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
 
           {/* Update Form */}
           <div className="space-y-4">
-            <div className={`grid gap-4 ${caseData.integration?.source === "qradar" ? "grid-cols-2" : "grid-cols-3"}`}>
+            <div className="grid gap-4 grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
-                  value={updates.status || ""}
+                  value={updates.status !== undefined ? updates.status : (caseData.status || "")}
                   onValueChange={(value) => setUpdates({ ...updates, status: value })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(caseData.integration?.source === "qradar" ? [{ value: "Closed", label: "Closed" }] : STATUSES).map((status) => (
+                    {STATUSES.map((status) => (
                       <SelectItem key={status.value} value={status.value}>
                         {status.label}
                       </SelectItem>
@@ -376,31 +449,29 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                 </Select>
               </div>
 
-              {caseData.integration?.source !== "qradar" && (
-                <div className="space-y-2">
-                  <Label htmlFor="severity">Severity</Label>
-                  <Select
-                    value={updates.severity || ""}
-                    onValueChange={(value) => setUpdates({ ...updates, severity: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select severity" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SEVERITIES.map((severity) => (
-                        <SelectItem key={severity.value} value={severity.value}>
-                          {severity.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="space-y-2">
+                <Label htmlFor="severity">Severity</Label>
+                <Select
+                  value={updates.severity !== undefined ? updates.severity : (caseData.severity || "")}
+                  onValueChange={(value) => setUpdates({ ...updates, severity: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select severity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SEVERITIES.map((severity) => (
+                      <SelectItem key={severity.value} value={severity.value}>
+                        {severity.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
               <div className="space-y-2">
                 <Label htmlFor="assignee">Assignee</Label>
                 <Select
-                  value={updates.assignee || ""}
+                  value={updates.assignee !== undefined ? updates.assignee : (caseData.assignee?.id || caseData.assigneeId || "")}
                   onValueChange={(value) => setUpdates({ ...updates, assignee: value })}
                 >
                   <SelectTrigger>
@@ -408,8 +479,14 @@ export function CaseActionDialog({ open, onOpenChange, case: caseData, onUpdate 
                   </SelectTrigger>
                   <SelectContent>
                     {(
-                      caseData.integration?.source === "qradar" ? QRADAR_ASSIGNEES : 
-                      (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh")) && appUsers.length > 0
+                      // For QRadar with app users loaded, use app users
+                      caseData.integration?.source === "qradar" && appUsers.length > 0
+                        ? appUsers
+                        // For QRadar without app users, use QRADAR_ASSIGNEES (fallback for external cases)
+                        : caseData.integration?.source === "qradar"
+                        ? QRADAR_ASSIGNEES
+                        // For other integrations, use appropriate list
+                        : (caseData.integration?.source === "wazuh" || caseData.integration?.name?.toLowerCase().includes("wazuh")) && appUsers.length > 0
                         ? appUsers
                         : ASSIGNEES
                     ).map((assignee) => (

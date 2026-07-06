@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
-import { AlertTriangleIcon, ShieldIcon, NetworkIcon, ShieldCheck, Clock } from "lucide-react"
+import { AlertTriangleIcon, ShieldIcon, NetworkIcon, ShieldCheck, Clock, MessageSquare } from "lucide-react"
 import { IpReputationDialog } from "@/components/alert/ip-reputation-dialog"
 import { HashReputationDialog } from "@/components/alert/hash-reputation-dialog"
 import { AiAnalysis } from "@/components/alert/ai-analysis"
@@ -20,7 +20,6 @@ interface WazuhAlertDetailDialogProps {
 }
 
 export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlertDetailDialogProps) {
-  
   if (!alert) return null
 
   // Log for debugging
@@ -721,7 +720,32 @@ export function WazuhAlertDetailDialog({ open, onOpenChange, alert }: WazuhAlert
             </DialogTitle>
             <DialogDescription className="text-sm mt-1">{alert.title || "Alert Details"}</DialogDescription>
           </div>
-          <div className="ml-4">
+          <div className="ml-4 flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2"
+              onClick={() => {
+                const ctx = [
+                  `Tolong analisis Wazuh alert berikut:`,
+                  `- Alert: ${alert.title || "Unknown"}`,
+                  `- Alert ID: ${alert.externalId || alert.id || "N/A"}`,
+                  `- Severity: ${alert.severity ?? "Unknown"}`,
+                  `- Agent: ${agentName || agentId || "N/A"}`,
+                  ruleId ? `- Rule ID: ${ruleId} (Level ${ruleLevel})` : null,
+                  ruleDescription ? `- Rule: ${ruleDescription}` : null,
+                  srcIp ? `- Source IP: ${srcIp}` : null,
+                  dstIp ? `- Dest IP: ${dstIp}` : null,
+                  mitreTactic ? `- MITRE Tactic: ${mitreTactic}` : null,
+                  alert.alert_time ? `- Time: ${new Date(alert.alert_time).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}` : null,
+                ].filter(Boolean).join("\n")
+                localStorage.setItem("soc_alert_context", ctx)
+                window.open("/dashboard/chat", "_blank")
+              }}
+            >
+              <MessageSquare className="h-4 w-4" />
+              Ask SOC GPT
+            </Button>
             <AiAnalysis getPayload={() => {
               const systemPrompt = `You are a senior cybersecurity analyst. Your task is to complete an incident report template.
 

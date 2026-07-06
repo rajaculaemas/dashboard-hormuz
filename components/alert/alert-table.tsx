@@ -422,6 +422,49 @@ export function AlertTable({
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const resizingRef = useRef<{ colId: string; startX: number; startWidth: number } | null>(null)
 
+  // Cache for QRadar events: offenseId -> { public_remote_ip, assigned_local_ip }
+  const [qradarEventsCache, setQradarEventsCache] = useState<Record<number, any>>({})
+
+  // Fetch QRadar events for IP columns
+  useEffect(() => {
+    const hasIpCols = columns?.some(c => c.visible && (c.id === 'publicRemoteIp' || c.id === 'assignedLocalIp'))
+    if (!hasIpCols) return
+
+    const qradarAlerts = alerts.filter(a => {
+      const src = a.integration?.source || ''
+      return src === 'qradar' || a.integration?.name?.toLowerCase().includes('qradar') || !!(a.metadata as any)?.qradar
+    })
+    if (qradarAlerts.length === 0) return
+
+    const newCache = { ...qradarEventsCache }
+    let fetched = 0
+    const fetchAll = async () => {
+      for (const a of qradarAlerts) {
+        const offenseId = (a.metadata as any)?.qradar?.id
+        if (!offenseId || newCache[offenseId]) continue
+        const integrationId = a.integrationId || a.integration?.id
+        if (!integrationId) continue
+        try {
+          const res = await fetch(`/api/qradar/events?offenseId=${encodeURIComponent(String(offenseId))}&integrationId=${encodeURIComponent(String(integrationId))}`)
+          if (res.ok) {
+            const data = await res.json()
+            const events = Array.isArray(data?.events) ? data.events : []
+            const pub = events.find((e: any) => e.public_remote_ip || e.metadata?.public_remote_ip)
+            const loc = events.find((e: any) => e.assigned_local_ip || e.metadata?.assigned_local_ip)
+            newCache[offenseId] = {
+              public_remote_ip: pub?.public_remote_ip || pub?.metadata?.public_remote_ip || null,
+              assigned_local_ip: loc?.assigned_local_ip || loc?.metadata?.assigned_local_ip || null,
+            }
+            fetched++
+            if (fetched >= 5) break
+          }
+        } catch {}
+      }
+      if (fetched > 0) setQradarEventsCache(newCache)
+    }
+    fetchAll()
+  }, [alerts, columns])
+
   // Debug: Log alert structure on first render or when alerts change
   useEffect(() => {
     if (alerts.length > 0) {
@@ -616,6 +659,9 @@ export function AlertTable({
         return alert.title || alert.metadata?.rule?.description || alert.metadata?.ruleDescription || alert.description || "Unknown"
 
       case "srcip": {
+        // QRadar: check qradar metadata first
+        const qSrc = (alert.metadata as any)?.qradar?.sourceip || (alert.metadata as any)?.qradar?.sourceIp
+        if (qSrc) return qSrc
         // Try Copilot first, then fallback to Wazuh
         const copilotNet = extractCopilotNetworkInfo(alert)
         if (copilotNet.srcIp) return copilotNet.srcIp
@@ -636,6 +682,9 @@ export function AlertTable({
       }
 
       case "dstip": {
+        // QRadar: check qradar metadata first
+        const qDst = (alert.metadata as any)?.qradar?.destinationip || (alert.metadata as any)?.qradar?.destinationIp
+        if (qDst) return qDst
         // Try Copilot first, then fallback to Wazuh
         const copilotNet = extractCopilotNetworkInfo(alert)
         if (copilotNet.dstIp) return copilotNet.dstIp
@@ -718,6 +767,50 @@ export function AlertTable({
             {alert.status || "-"}
           </Badge>
         )
+
+      case "assignee": {
+        const meta = alert.metadata || {}
+        const integration = getIntegrationName(alert)
+        const integrationSource = alert.integration?.source || alert.integrationSource || ""
+        
+        // Extract assignee based on integration type
+        let assignee = "-"
+        
+        // Check both name and source for better matching
+        if (integration.includes("QRadar") || integrationSource === "qradar") {
+          // For QRadar, ALWAYS prioritize qradar.assigned_to
+          // This field should always be populated from QRadar API
+          const qradarAssignedTo = meta.qradar?.assigned_to
+          
+          if (qradarAssignedTo && qradarAssignedTo.trim() && qradarAssignedTo !== "Unassigned") {
+            assignee = qradarAssignedTo
+          } else if (qradarAssignedTo === "Unassigned") {
+            assignee = "-"
+          } else {
+            // Fallback to other fields only if qradar.assigned_to is truly missing
+            assignee = meta.assigned_to || "-"
+          }
+        } else if (integration.includes("Stellar") || integrationSource === "stellar-cyber") {
+          assignee = meta.assignee || "-"
+        } else if (integration.includes("SOCFortress") || integration.includes("Copilot") || integrationSource === "socfortress") {
+          // Try nested path first: metadata.socfortress.assigned_to
+          assignee = meta.socfortress?.assigned_to || 
+                     meta.incident_event?.assigned_to ||
+                     meta.assigned_to || 
+                     "-"
+        } else if (integration.includes("Wazuh") || integrationSource === "wazuh") {
+          assignee = meta.assignee || "-"
+        } else {
+          // Fallback for unknown integrations - always check meta.assignee first
+          assignee = meta.assignee || 
+                     meta.assigned_to || 
+                     meta.qradar?.assigned_to || 
+                     meta.socfortress?.assigned_to || 
+                     "-"
+        }
+        
+        return assignee
+      }
 
       case "sourcePort": {
         // Try Copilot first, then fallback to Wazuh
@@ -912,6 +1005,116 @@ export function AlertTable({
         )
       }
 
+      // ---- QRadar-specific columns ----
+      case "publicRemoteIp": {
+        const meta = alert.metadata as any
+        const fromMeta = meta?.qradar?.public_remote_ip || meta?.qradar?.publicRemoteIp
+        if (fromMeta) return fromMeta
+        const offenseId = meta?.qradar?.id
+        const cached = offenseId ? qradarEventsCache[offenseId] : null
+        return cached?.public_remote_ip || "-"
+      }
+
+      case "assignedLocalIp": {
+        const meta = alert.metadata as any
+        const fromMeta = meta?.qradar?.assigned_local_ip || meta?.qradar?.assignedLocalIp
+        if (fromMeta) return fromMeta
+        const offenseId = meta?.qradar?.id
+        const cached = offenseId ? qradarEventsCache[offenseId] : null
+        return cached?.assigned_local_ip || "-"
+      }
+
+      case "qradarOffenseId": {
+        const meta = alert.metadata as any
+        const qId = meta?.qradar?.id
+        if (qId !== undefined && qId !== null) return String(qId)
+        const extId = alert.externalId || ''
+        const m = extId.match(/qradar-[^-]+-(.+)$/)
+        return m ? m[1] : "-"
+      }
+
+      case "qradarOffenseSource":
+        return (alert.metadata as any)?.qradar?.offense_source || "-"
+
+      case "qradarCloseTime": {
+        const ct = (alert.metadata as any)?.qradar?.close_time
+        if (!ct) return "-"
+        try {
+          const ms = Number(ct)
+          return new Date(ms).toLocaleString('en-GB', {
+            timeZone: 'Asia/Bangkok',
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+          })
+        } catch { return String(ct) }
+      }
+
+      case "qradarSourceUsername": {
+        const meta = alert.metadata as any
+        return meta?.qradar?.username || meta?.username || "-"
+      }
+
+      case "qradarApp": {
+        const meta = alert.metadata as any
+        const logSources = meta?.qradar?.log_sources
+        if (Array.isArray(logSources) && logSources.length > 0) {
+          const names = logSources.map((ls: any) => ls.type_name || ls.name).filter(Boolean)
+          if (names.length > 0) return names.join(', ')
+        }
+        const cats = meta?.qradar?.categories
+        if (Array.isArray(cats) && cats.length > 0) return cats.join(', ')
+        return "-"
+      }
+
+      case "qradarDestHost": {
+        const meta = alert.metadata as any
+        return meta?.qradar?.destination_networks?.[0] || meta?.qradar?.destination_host || "-"
+      }
+
+      case "qradarSrcCountry": {
+        const meta = alert.metadata as any
+        return meta?.qradar?.source_network || meta?.qradar?.src_country || "-"
+      }
+
+      case "qradarDstCountry": {
+        const meta = alert.metadata as any
+        return meta?.qradar?.destination_network || meta?.qradar?.dst_country || "-"
+      }
+
+      case "qradarNotes": {
+        const meta = alert.metadata as any
+        // Check all possible note/comment locations
+        const notes = meta?.qradar?.notes || meta?.comment || meta?.notes
+        if (!notes) return "-"
+        
+        if (Array.isArray(notes)) {
+          if (notes.length === 0) return "-"
+          
+          // Extract text from each note, handling both QRadar and dashboard formats
+          const texts = notes
+            .map((n: any) => {
+              if (typeof n === "object") {
+                // QRadar format: n.note_text
+                // Dashboard format: n.comment
+                // Fallback: n.text, n.content
+                return (n.note_text || n.comment || n.text || n.content || "").trim()
+              }
+              return String(n).trim()
+            })
+            .filter(Boolean)
+          
+          return texts.length > 0 ? texts.join(" | ") : "-"
+        }
+        
+        if (typeof notes === "object") {
+          // Single note (not array)
+          const text = notes.note_text || notes.comment || notes.text || notes.content
+          return text ? String(text).trim() : "-"
+        }
+        
+        return String(notes).trim() || "-"
+      }
+
       default:
         return "-"
     }
@@ -999,6 +1202,28 @@ export function AlertTable({
         return alert.severity || null
       case "status":
         return alert.status || null
+      case "assignee": {
+        const meta = alert.metadata || {}
+        const integration = alert.integrationName || alert.integration?.name || ""
+        
+        // Extract assignee based on integration type for sorting/filtering
+        if (integration === "QRadar" || integration.includes("QRadar")) {
+          return meta.qradar?.assigned_to || meta.assigned_to || null
+        } else if (integration === "Stellar Cyber" || integration.includes("Stellar")) {
+          return meta.assignee || null
+        } else if (integration === "SOCFortress" || integration === "Copilot" || integration.includes("SOCFortress")) {
+          // Try nested paths for SOCFortress
+          return meta.socfortress?.assigned_to || 
+                 meta.incident_event?.assigned_to ||
+                 meta.assigned_to || 
+                 null
+        } else if (integration === "Wazuh" || integration.includes("Wazuh")) {
+          return meta.assignee || null
+        } else {
+          // Fallback
+          return meta.assignee || meta.assigned_to || meta.qradar?.assigned_to || meta.socfortress?.assigned_to || null
+        }
+      }
       case "sourcePort": {
         // Try Copilot first, then fallback to Wazuh
         const copilotNetPortRaw = extractCopilotNetworkInfo(alert)
@@ -1222,13 +1447,13 @@ export function AlertTable({
                       if (checked) {
                         const allIds = (allVisibleAlertIds && allVisibleAlertIds.length > 0)
                           ? allVisibleAlertIds
-                          : alerts.filter(a => !a.metadata?.qradar).map(a => a.id)
+                          : alerts.map(a => a.id)
                         const toAdd = allIds.filter(id => !selectedAlerts.includes(id))
                         toAdd.forEach(id => onSelectAlert(true, id))
                       } else {
                         const allIds = (allVisibleAlertIds && allVisibleAlertIds.length > 0)
                           ? allVisibleAlertIds
-                          : alerts.filter(a => !a.metadata?.qradar).map(a => a.id)
+                          : alerts.map(a => a.id)
                         allIds.forEach(id => onSelectAlert(false, id))
                       }
                     }}
@@ -1292,7 +1517,7 @@ export function AlertTable({
                     className="hover:bg-muted/50 transition-colors"
                   >
                     <TableCell>
-                      {!alert.metadata?.qradar && canUpdateAlert && (
+                      {canUpdateAlert && (
                         <Checkbox
                           checked={selectedAlerts.includes(alert.id)}
                           onCheckedChange={(checked) => onSelectAlert(checked as boolean, alert.id)}

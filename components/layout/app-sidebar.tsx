@@ -1,6 +1,6 @@
 "use client"
 
-import { Bell, MessageSquare, Search, BookOpen, GraduationCap, Settings, Shield, Ticket, User, Moon, Sun, LogOut, Users, BarChart3, Clock } from "lucide-react"
+import { Bell, MessageSquare, Search, BookOpen, GraduationCap, Settings, Ticket, User, Users, BarChart3, Clock, ChevronRight } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -8,20 +8,33 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarMenuSubButton,
 } from "@/components/ui/sidebar"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { useTheme } from "next-themes"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useAuth } from "@/lib/auth/auth-context"
-import { useRouter } from "next/navigation"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
-const menuItems = [
+interface MenuSubItem {
+  title: string
+  url: string
+  icon?: any
+}
+
+interface MenuItem {
+  title: string
+  url?: string
+  icon: any
+  adminOnly?: boolean
+  submenu?: MenuSubItem[]
+}
+
+const menuItems: MenuItem[] = [
   {
     title: "Alert Panel",
     url: "/dashboard",
@@ -38,7 +51,7 @@ const menuItems = [
     icon: Search,
   },
   {
-    title: "SOARGPT Playbook",
+    title: "Playbook",
     url: "/dashboard/playbook",
     icon: BookOpen,
   },
@@ -53,9 +66,27 @@ const menuItems = [
     icon: Ticket,
   },
   {
-    title: "SLA Dashboard",
-    url: "/dashboard/sla",
+    title: "Notifications",
+    url: "/dashboard/notifications",
+    icon: Bell,
+  },
+  {
+    title: "Professional Dashboard",
     icon: BarChart3,
+    submenu: [
+      {
+        title: "Alert and Case Distribution",
+        url: "/dashboard/professional-dashboard/overview",
+      },
+      {
+        title: "Analyst Performance",
+        url: "/dashboard/professional-dashboard/analyst-performance",
+      },
+      {
+        title: "SLA Dashboard",
+        url: "/dashboard/professional-dashboard/sla",
+      },
+    ],
   },
   {
     title: "Training Center",
@@ -76,43 +107,61 @@ const menuItems = [
 ]
 
 export function AppSidebar() {
-  const { theme, setTheme } = useTheme()
   const { user } = useAuth()
-  const router = useRouter()
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' })
-    router.push('/login')
-  }
+  const [expandedMenu, setExpandedMenu] = useState<string | null>(null)
 
   return (
-    <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-4 py-2">
-          <Shield className="h-6 w-6" />
-          <span className="font-semibold">AI Driven SecOps</span>
-        </div>
-      </SidebarHeader>
+    <Sidebar collapsible="icon">
       <SidebarContent>
-        <SidebarGroup>
+        <SidebarGroup className="mt-14">
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {menuItems.map((item) => (
                 (!item.adminOnly || user?.role === 'administrator') && (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton asChild>
-                      <Link href={item.url}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+                  <div key={item.title}>
+                    {item.submenu ? (
+                      <Collapsible
+                        open={expandedMenu === item.title}
+                        onOpenChange={(open) => setExpandedMenu(open ? item.title : null)}
+                      >
+                        <SidebarMenuItem>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuButton className="cursor-pointer">
+                              <item.icon className="h-4 w-4" />
+                              <span>{item.title}</span>
+                              <ChevronRight className="ml-auto h-4 w-4 transition-transform duration-200" style={{
+                                transform: expandedMenu === item.title ? 'rotate(90deg)' : 'rotate(0deg)'
+                              }} />
+                            </SidebarMenuButton>
+                          </CollapsibleTrigger>
+                        </SidebarMenuItem>
+                        <CollapsibleContent asChild>
+                          <SidebarMenuSub>
+                            {item.submenu.map((subitem) => (
+                              <SidebarMenuSubItem key={subitem.title}>
+                                <SidebarMenuSubButton asChild>
+                                  <Link href={subitem.url}>
+                                    {subitem.icon && <subitem.icon className="h-4 w-4" />}
+                                    <span>{subitem.title}</span>
+                                  </Link>
+                                </SidebarMenuSubButton>
+                              </SidebarMenuSubItem>
+                            ))}
+                          </SidebarMenuSub>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    ) : (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild>
+                          <Link href={item.url!}>
+                            <item.icon className="h-4 w-4" />
+                            <span>{item.title}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                  </div>
                 )
               ))}
             </SidebarMenu>
@@ -120,48 +169,7 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between px-2">
-            <span className="text-xs font-medium text-muted-foreground">Theme</span>
-            {mounted && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                className="h-8 w-8 p-0"
-              >
-                {theme === "dark" ? (
-                  <Sun className="h-4 w-4" />
-                ) : (
-                  <Moon className="h-4 w-4" />
-                )}
-              </Button>
-            )}
-          </div>
-          <Link href="/dashboard/profile">
-            <div className="flex items-center gap-2 px-4 py-2 border-t rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src="/placeholder.svg?height=32&width=32" />
-                <AvatarFallback>
-                  <User className="h-4 w-4" />
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex flex-col flex-1 min-w-0">
-                <span className="text-sm font-medium truncate">{user?.name}</span>
-                <span className="text-xs text-muted-foreground truncate">{user?.role}</span>
-              </div>
-            </div>
-          </Link>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleLogout}
-            className="w-full"
-          >
-            <LogOut className="h-4 w-4 mr-2" />
-            Logout
-          </Button>
-        </div>
+        {/* Footer kosong - user info sudah di header */}
       </SidebarFooter>
     </Sidebar>
   )

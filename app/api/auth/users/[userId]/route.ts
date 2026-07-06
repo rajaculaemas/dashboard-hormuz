@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hashPassword, hasPermission } from '@/lib/auth/password';
 
@@ -202,9 +202,33 @@ export async function DELETE(
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    await prisma.user.delete({
-      where: { id: userId },
-    });
+    // Delete user with transaction to handle all related records
+    await prisma.$transaction([
+      // Delete escalation responses assigned to this user (L3) - escalatedToId is nullable
+      prisma.alertEscalationResponse.deleteMany({
+        where: { escalatedToId: userId },
+      }),
+      // Delete alert escalations assigned to this user - escalatedToUserId is non-nullable so must delete
+      prisma.alertEscalation.deleteMany({
+        where: { escalatedToUserId: userId },
+      }),
+      // Delete user integrations
+      prisma.userIntegration.deleteMany({
+        where: { userId },
+      }),
+      // Delete user stellar cyber credentials
+      prisma.userStellarCyberCredential.deleteMany({
+        where: { userId },
+      }),
+      // Delete user stellar cyber host credentials
+      prisma.userStellarCyberHostCredential.deleteMany({
+        where: { userId },
+      }),
+      // Finally delete the user
+      prisma.user.delete({
+        where: { id: userId },
+      }),
+    ]);
 
     return NextResponse.json({
       success: true,

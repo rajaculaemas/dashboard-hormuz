@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
 import { TelegramSetupPanel } from '@/components/admin/telegram-setup-panel';
+import { AdminStellarCyberKeyManagement } from '@/components/admin/admin-stellar-cyber-key-management';
 import {
   Table,
   TableBody,
@@ -108,9 +109,13 @@ export default function AdminPage() {
           const keyResponse = await fetch(`/api/users/${u.id}/stellar-key`);
           if (keyResponse.ok) {
             const keyData = await keyResponse.json();
-            keyStatus[u.id] = keyData.hasApiKey;
+            keyStatus[u.id] = keyData.hasKey || false;
+          } else {
+            console.warn(`Failed to fetch stellar key for user ${u.id}: ${keyResponse.status}`);
+            keyStatus[u.id] = false;
           }
         } catch (err) {
+          console.error(`Error fetching stellar key for user ${u.id}:`, err);
           keyStatus[u.id] = false;
         }
       }
@@ -167,27 +172,6 @@ export default function AdminPage() {
 
         if (!response.ok) throw new Error('Failed to update user');
 
-        // Save Stellar API key if provided
-        if (formData.stellarCyberApiKey.trim()) {
-          try {
-            const stellarResponse = await fetch(`/api/users/${editingUser.id}/stellar-key`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ apiKey: formData.stellarCyberApiKey }),
-            });
-
-            if (!stellarResponse.ok) {
-              throw new Error('Failed to save Stellar API key');
-            }
-          } catch (error: any) {
-            toast({
-              title: 'Warning',
-              description: error.message || 'Failed to save Stellar API key',
-              variant: 'destructive',
-            });
-          }
-        }
-
         toast({
           title: 'Success',
           description: 'User updated successfully',
@@ -219,9 +203,13 @@ export default function AdminPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ...formData,
+            email: formData.email,
+            name: formData.name,
+            password: formData.password,
+            role: formData.role,
             position: formData.position || null,
             telegramChatId: formData.telegramChatId || null,
+            integrationIds: formData.integrationIds,
           }),
         });
 
@@ -457,39 +445,12 @@ export default function AdminPage() {
               </div>
 
               {editingUser && (
-                <div className="border-t pt-4">
-                  <Label className="text-base font-semibold mb-3 block">
-                    Stellar Cyber API Key
-                  </Label>
-                  {userStellarKeys[editingUser.id] ? (
-                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-3">
-                      <p className="text-sm text-green-800">
-                        ✓ User has Stellar Cyber API Key configured
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-3">
-                      <p className="text-sm text-yellow-800">
-                        No Stellar Cyber API Key configured for this user
-                      </p>
-                    </div>
-                  )}
-                  <div>
-                    <Label htmlFor="stellarApiKey">Add or Update API Key</Label>
-                    <Input
-                      id="stellarApiKey"
-                      type="password"
-                      placeholder="Paste Stellar Cyber API key here"
-                      value={formData.stellarCyberApiKey ?? ''}
-                      onChange={(e) =>
-                        setFormData({ ...formData, stellarCyberApiKey: e.target.value })
-                      }
-                    />
-                    <p className="text-xs text-gray-500 mt-2">
-                      Leave empty to keep current key
-                    </p>
-                  </div>
-                </div>
+                <>
+                  <AdminStellarCyberKeyManagement 
+                    userId={editingUser.id} 
+                    userName={editingUser.name}
+                  />
+                </>
               )}
 
               {formData.role !== 'administrator' && (

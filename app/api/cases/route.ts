@@ -68,28 +68,66 @@ export async function GET(request: NextRequest) {
 
     // If absolute date range provided, use it
     if (fromDate && toDate) {
-      // Parse YYYY-MM-DD format as UTC+7 local date
-      // fromDate is like "2025-12-10" which should be Dec 10 00:00 UTC+7
-      // We need to convert this to UTC for database query
+      // Handle both formats:
+      // 1. ISO datetime strings: "2026-05-03T17:00:00.000Z"
+      // 2. Date-only strings: "2026-05-03"
       
-      // Parse as UTC first
-      const fromUTC = new Date(fromDate + 'T00:00:00Z')
-      const toUTC = new Date(toDate + 'T00:00:00Z')
+      let fromUTC: Date
+      let toUTC: Date
       
-      // Adjust by UTC+7 offset (subtract 7 hours to get back to UTC)
-      // UTC+7 means local time is 7 hours ahead, so to convert local to UTC we subtract 7 hours
-      const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
-      startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
-      endDate = new Date(toUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+      // Check if format is ISO datetime (contains T) or date-only (doesn't contain T)
+      if (fromDate.includes('T')) {
+        // ISO datetime format - parse directly
+        fromUTC = new Date(fromDate)
+        toUTC = new Date(toDate)
+        
+        console.log("Using ISO datetime format:", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          parsedFromUTC: fromUTC.toISOString(),
+          parsedToUTC: toUTC.toISOString(),
+        })
+        
+        // The dates are already in UTC format, no conversion needed
+        startDate = fromUTC
+        endDate = toUTC
+      } else {
+        // Date-only format (legacy): "2026-05-03"
+        // Parse as UTC+7 local date and convert to UTC
+        
+        fromUTC = new Date(fromDate + 'T00:00:00Z')
+        toUTC = new Date(toDate + 'T00:00:00Z')
+        
+        // Adjust by UTC+7 offset (subtract 7 hours to get back to UTC)
+        // UTC+7 means local time is 7 hours ahead, so to convert local to UTC we subtract 7 hours
+        const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
+        startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+        
+        // For end date, we want the last second of that date in UTC+7
+        // Which is 7 hours before the start of the next day in UTC+7
+        const nextDayUTC = new Date(toUTC.getTime() + 24 * 60 * 60 * 1000)
+        endDate = new Date(nextDayUTC.getTime() - UTC_PLUS_7_OFFSET_MS - 1)
+        
+        console.log("Using date-only format (UTC+7 conversion):", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          startDateUTC: startDate.toISOString(),
+          endDateUTC: endDate.toISOString(),
+        })
+      }
       
-      // Set end date to end of day (23:59:59.999) in UTC to include all cases on that calendar day
-      endDate.setUTCHours(23, 59, 59, 999)
+      // Validate dates
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        console.error("Invalid date range:", { startDate, endDate })
+        return NextResponse.json(
+          { error: 'Invalid date range provided' },
+          { status: 400 }
+        )
+      }
       
-      console.log("Using absolute date range (UTC+7):", {
-        rawFromDate: fromDate,
-        rawToDate: toDate,
-        startDateUTC: startDate.toISOString(),
-        endDateUTC: endDate.toISOString(),
+      console.log("Final date range for query:", {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
       })
     } else if (timeRange !== "all") {
       // Otherwise use relative time range
@@ -200,8 +238,14 @@ export async function GET(request: NextRequest) {
         // Fetch SOCFortress/Copilot cases directly from MySQL
         console.log(`[API] ✓ SOCFortress integration detected: ${integration.name}`)
         console.log(`[API] Fetching SOCFortress cases for integration: ${integration.name}`)
+        console.log(`[API] Date filter: ${where.createdAt ? 'Applied' : 'None'}`)
         try {
-          const result = await getSocfortressCases(integrationId, { limit: 500 })
+          const result = await getSocfortressCases(integrationId, { 
+            limit: 500,
+            // Pass date range from where clause if it exists
+            fromDate: where.createdAt?.gte as Date | undefined,
+            toDate: where.createdAt?.lte as Date | undefined,
+          })
           console.log(`[API] getSocfortressCases returned ${result.cases.length} cases with alerts`)
           
           cases = result.cases.map((caseData: any) => {
@@ -271,35 +315,143 @@ export async function GET(request: NextRequest) {
         console.log(`Found ${cases.length} Stellar Cyber cases in database`)
       }
     } else {
-      // No integration selected, fetch from Case table
-      cases = await prisma.case.findMany({
-        where,
-        include: {
-          integration: {
-            select: {
-              id: true,
-              name: true,
-              source: true,
-            },
-          },
-          relatedAlerts: {
-            include: {
-              alert: {
-                select: {
-                  id: true,
-                  timestamp: true,
-                  metadata: true,
+      // No integration selected, fetch from ALL accessible integrations
+      console.log(`[API] Fetching cases from all ${accessibleIntegrations.length} accessible integrations`)
+      
+      for (const accIntegrationId of accessibleIntegrations) {
+        const accIntegration = await prisma.integration.findUnique({
+          where: { id: accIntegrationId },
+        })
+        
+        if (!accIntegration) continue
+        
+        console.log(`[API Multi-Int] Fetching from "${accIntegration.name}" (source: ${accIntegration.source})`)
+        
+        try {
+          if (accIntegration.source === "qradar") {
+            // Fetch QRadar alerts
+            const alertWhere: any = {
+              integrationId: accIntegrationId,
+              OR: [
+                { status: "In Progress" },
+                { status: "Closed" },
+                { metadata: { path: ["qradar", "follow_up"], equals: true } },
+              ],
+            }
+            
+            if (where.createdAt) {
+              alertWhere.timestamp = where.createdAt
+            }
+            
+            const qradarAlerts = await prisma.alert.findMany({
+              where: alertWhere,
+              include: {
+                integration: {
+                  select: { id: true, name: true, source: true },
                 },
               },
-            },
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      })
-
-      console.log(`Found ${cases.length} cases in database`)
+              orderBy: { timestamp: "desc" },
+            })
+            
+            const qradarCases = qradarAlerts.map((a) => ({
+              id: a.id,
+              externalId: a.externalId || a.id,
+              ticketId: null,
+              name: a.title,
+              description: a.description,
+              status: a.status,
+              severity: a.severity,
+              assignee: a.metadata?.assignee || a.metadata?.qradar?.assigned_to || null,
+              assigneeName: a.metadata?.assignee || a.metadata?.qradar?.assigned_to || null,
+              createdAt: a.timestamp || new Date(),
+              updatedAt: a.updatedAt || a.timestamp || new Date(),
+              acknowledgedAt: null,
+              integrationId: a.integrationId,
+              integration: a.integration,
+              metadata: a.metadata,
+            }))
+            
+            console.log(`[API Multi-Int] QRadar: found ${qradarCases.length} cases`)
+            cases.push(...qradarCases)
+          } else if (accIntegration.source === "socfortress" || accIntegration.source === "copilot" || accIntegration.name?.toLowerCase().includes("socfortress")) {
+            // Fetch SOCFortress cases
+            try {
+              const result = await getSocfortressCases(accIntegrationId, { 
+                limit: 500,
+                // Pass date range from where clause if it exists
+                fromDate: where.createdAt?.gte as Date | undefined,
+                toDate: where.createdAt?.lte as Date | undefined,
+              })
+              const socfortressCases = result.cases.map((caseData: any) => ({
+                id: caseData.externalId,
+                externalId: caseData.externalId,
+                ticketId: parseInt(caseData.externalId),
+                name: caseData.name,
+                description: caseData.description,
+                status: caseData.status,
+                severity: caseData.severity,
+                assignee: caseData.metadata?.socfortress?.assigned_to || null,
+                assigneeName: caseData.metadata?.socfortress?.assigned_to || null,
+                createdAt: new Date(caseData.timestamp),
+                updatedAt: new Date(caseData.timestamp),
+                acknowledgedAt: null,
+                integrationId: caseData.integrationId,
+                integration: {
+                  id: caseData.integrationId,
+                  name: accIntegration.name,
+                  source: accIntegration.source,
+                },
+                metadata: caseData.metadata || {},
+                mttrMinutes: caseData.mttrMinutes || null,
+                alerts: caseData.alerts || [],
+              }))
+              
+              console.log(`[API Multi-Int] SOCFortress: found ${socfortressCases.length} cases`)
+              cases.push(...socfortressCases)
+            } catch (error) {
+              console.error(`[API Multi-Int] Error fetching SOCFortress cases: ${error}`)
+            }
+          } else {
+            // Fetch Stellar Cyber cases from Case table
+            const stellarCases = await prisma.case.findMany({
+              where: {
+                ...where,
+                integrationId: accIntegrationId,
+              },
+              include: {
+                integration: {
+                  select: {
+                    id: true,
+                    name: true,
+                    source: true,
+                  },
+                },
+                relatedAlerts: {
+                  include: {
+                    alert: {
+                      select: {
+                        id: true,
+                        timestamp: true,
+                        metadata: true,
+                      },
+                    },
+                  },
+                },
+              },
+              orderBy: {
+                createdAt: "desc",
+              },
+            })
+            
+            console.log(`[API Multi-Int] ${accIntegration.name || "Stellar"}: found ${stellarCases.length} cases`)
+            cases.push(...stellarCases)
+          }
+        } catch (error) {
+          console.error(`[API Multi-Int] Error fetching from ${accIntegration.name}:`, error)
+        }
+      }
+      
+      console.log(`[API] Total cases from all integrations: ${cases.length}`)
     }
 
     // Log some sample cases for debugging

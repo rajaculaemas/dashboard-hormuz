@@ -374,19 +374,40 @@ async function fetchCaseAlertsFromDB(
 async function fetchUnlinkedAlerts(
   conn: mysql.Connection,
   limit: number = 50,
+  options?: { fromDate?: Date; toDate?: Date },
 ): Promise<any[]> {
   try {
     // Fetch ALL alerts sorted by creation time (not just unlinked ones)
     // This ensures we capture all alerts regardless of case association
     const limitInt = Math.floor(limit)
+    let whereClause = ""
+    const params: any[] = []
+
+    if (options?.fromDate || options?.toDate) {
+      const conditions: string[] = []
+      if (options.fromDate) {
+        conditions.push("a.alert_creation_time >= ?")
+        params.push(toMySQLDatetime(options.fromDate))
+      }
+      if (options.toDate) {
+        conditions.push("a.alert_creation_time <= ?")
+        params.push(toMySQLDatetime(options.toDate))
+      }
+
+      if (conditions.length > 0) {
+        whereClause = `WHERE ${conditions.join(" AND ")}`
+      }
+    }
+
     const query = `
       SELECT a.*
       FROM incident_management_alert a
+      ${whereClause}
       ORDER BY a.alert_creation_time DESC
       LIMIT ${limitInt}
     `
 
-    const [rows] = await conn.execute<any[]>(query)
+    const [rows] = await conn.execute<any[]>(query, params)
     
     // For each alert, fetch its related incident events, history, and tags sequentially
     const enrichedAlerts: any[] = []
@@ -487,19 +508,40 @@ async function fetchCaseHistoryFromDB(
 /**
  * Fetch recent cases
  */
-async function fetchRecentCases(conn: mysql.Connection, limit: number = 50): Promise<SocfortressCase[]> {
+async function fetchRecentCases(conn: mysql.Connection, limit: number = 50, options?: { fromDate?: Date; toDate?: Date }): Promise<SocfortressCase[]> {
   try {
     // Ensure limit is a positive integer
     const safeLimit = Math.max(1, Math.floor(limit))
     
+    // Build date filter if provided
+    let whereClause = ""
+    let params: any[] = []
+    
+    if (options?.fromDate || options?.toDate) {
+      const conditions: string[] = []
+      if (options.fromDate) {
+        conditions.push("c.case_creation_time >= ?")
+        params.push(toMySQLDatetime(options.fromDate))
+      }
+      if (options.toDate) {
+        conditions.push("c.case_creation_time <= ?")
+        params.push(toMySQLDatetime(options.toDate))
+      }
+      
+      if (conditions.length > 0) {
+        whereClause = "WHERE " + conditions.join(" AND ")
+      }
+    }
+    
     const query = `
       SELECT c.*
       FROM incident_management_case c
+      ${whereClause}
       ORDER BY c.case_creation_time DESC
       LIMIT ${safeLimit}
     `
 
-    const [rows] = await conn.execute<any[]>(query)
+    const [rows] = await conn.execute<any[]>(query, params)
     return rows || []
   } catch (error) {
     console.error("Error fetching recent cases:", error)
@@ -564,21 +606,24 @@ async function updateAlertStatusInMySQL(
   comments?: string,
   assignedTo?: string,
   severity?: string,
+  tagsToAdd?: string[],
+  tagsToDelete?: string[],
 ): Promise<boolean> {
   try {
     // Map generic status to MySQL status
     const mysqlStatus = mapStatusToMySQL(newStatus)
+    const timeClosed = mysqlStatus === "CLOSED" ? toMySQLDatetime(new Date()) : null
 
     // Map severity to MySQL format if provided
     const mysqlSeverity = severity ? mapSeverityToMySQL(severity) : undefined
 
     // Update main alert
     const updateQuery = mysqlSeverity
-      ? "UPDATE incident_management_alert SET status = ?, assigned_to = ?, severity = ? WHERE id = ?"
-      : "UPDATE incident_management_alert SET status = ?, assigned_to = ? WHERE id = ?"
+      ? "UPDATE incident_management_alert SET status = ?, assigned_to = ?, severity = ?, time_closed = ? WHERE id = ?"
+      : "UPDATE incident_management_alert SET status = ?, assigned_to = ?, time_closed = ? WHERE id = ?"
     const updateParams = mysqlSeverity
-      ? [mysqlStatus, assignedTo || null, mysqlSeverity, alertId]
-      : [mysqlStatus, assignedTo || null, alertId]
+      ? [mysqlStatus, assignedTo || null, mysqlSeverity, timeClosed, alertId]
+      : [mysqlStatus, assignedTo || null, timeClosed, alertId]
     
     await conn.execute(updateQuery, updateParams)
 
@@ -589,6 +634,10 @@ async function updateAlertStatusInMySQL(
         "INSERT INTO incident_management_comment (alert_id, comment, user_name, created_at) VALUES (?, ?, ?, ?)",
         [alertId, comments, assignedTo || "system", commentTimestamp],
       )
+      // Note: SOCFortress Python backend automatically creates a COMMENT_ADDED entry
+      // in incident_management_alert_history when it detects a new comment.
+      // We do NOT insert that entry ourselves to keep the DB state identical to
+      // updates made directly from the SOCFortress UI.
     }
 
     // Add history entry with explicit UTC timestamp in MySQL format
@@ -608,6 +657,105 @@ async function updateAlertStatusInMySQL(
          VALUES (?, 'SEVERITY_CHANGE', 'severity', NULL, ?, ?, ?)`,
         [alertId, mysqlSeverity, utcNow, `Severity changed to ${mysqlSeverity}`],
       )
+    }
+
+    // Handle tag deletions
+    if (tagsToDelete && tagsToDelete.length > 0) {
+      try {
+        // Get tag IDs for the tags to delete
+        // IMPORTANT: Use LIMIT 1 for each tag to avoid duplicates
+        // If alerttag table has multiple IDs with same name, we only want one
+        let tags: any[] = []
+        for (const tagName of tagsToDelete) {
+          const [result] = await conn.execute(
+            `SELECT id FROM incident_management_alerttag WHERE tag = ? LIMIT 1`,
+            [tagName],
+          ) as any[]
+          if (result && result.length > 0) {
+            tags.push(result[0])
+          }
+        }
+
+        if (tags && tags.length > 0) {
+          const tagIds = (tags as any[]).map((t: any) => t.id)
+          const tagIdPlaceholders = tagIds.map(() => "?").join(",")
+          
+          // Delete from junction table
+          await conn.execute(
+            `DELETE FROM incident_management_alert_to_tag 
+             WHERE alert_id = ? AND tag_id IN (${tagIdPlaceholders})`,
+            [alertId, ...tagIds],
+          )
+
+          // Log history for tag removal
+          for (const tagId of tagIds) {
+            const tagData = tags.find((t: any) => t.id === tagId) as any
+            await conn.execute(
+              `INSERT INTO incident_management_alert_history 
+               (alert_id, change_type, field_name, old_value, new_value, changed_at, description)
+               VALUES (?, 'TAG_REMOVED', 'tags', ?, NULL, ?, ?)`,
+              [alertId, tagData?.tag || `Tag ${tagId}`, utcNow, `Tag removed: ${tagData?.tag || `Tag ${tagId}`}`],
+            )
+          }
+
+          console.log(`[SOCFortress] Removed ${tagIds.length} tags from alert ${alertId}`)
+        }
+      } catch (error) {
+        console.error(`[SOCFortress] Error deleting tags:`, error)
+        // Continue even if tag deletion fails
+      }
+    }
+
+    // Handle tag additions
+    if (tagsToAdd && tagsToAdd.length > 0) {
+      try {
+        // Get tag IDs for the tags to add
+        // IMPORTANT: Use LIMIT 1 for each tag to avoid duplicates
+        // If alerttag table has multiple IDs with same name, we only want one
+        let tags: any[] = []
+        for (const tagName of tagsToAdd) {
+          const [result] = await conn.execute(
+            `SELECT id FROM incident_management_alerttag WHERE tag = ? LIMIT 1`,
+            [tagName],
+          ) as any[]
+          if (result && result.length > 0) {
+            tags.push(result[0])
+          }
+        }
+
+        if (tags && tags.length > 0) {
+          const tagIds = (tags as any[]).map((t: any) => t.id)
+
+          // Insert into junction table, skipping if already exists
+          for (const tagId of tagIds) {
+            try {
+              await conn.execute(
+                `INSERT IGNORE INTO incident_management_alert_to_tag (alert_id, tag_id) 
+                 VALUES (?, ?)`,
+                [alertId, tagId],
+              )
+
+              // Log history for tag addition
+              const tagData = tags.find((t: any) => t.id === tagId) as any
+              await conn.execute(
+                `INSERT INTO incident_management_alert_history 
+                 (alert_id, change_type, field_name, old_value, new_value, changed_at, description)
+                 VALUES (?, 'TAG_ADDED', 'tags', NULL, ?, ?, ?)`,
+                [alertId, tagData?.tag || `Tag ${tagId}`, utcNow, `Tag added: ${tagData?.tag || `Tag ${tagId}`}`],
+              )
+            } catch (err) {
+              console.warn(`[SOCFortress] Skipped tag ${tagId} (possibly already linked)`)
+            }
+          }
+
+          console.log(`[SOCFortress] Added ${tagIds.length} tags to alert ${alertId}`)
+        } else {
+          console.warn(`[SOCFortress] Tags not found in database: ${tagsToAdd.join(", ")}`)
+        }
+      } catch (error) {
+        console.error(`[SOCFortress] Error adding tags:`, error)
+        // Continue even if tag addition fails
+      }
     }
 
     return true
@@ -758,14 +906,20 @@ function mapSeverityToMySQL(severity: string): string {
   return severityMap[severity] || "Medium"
 }
 
-export async function getSocfortressAlerts(integrationId: string, options?: { limit?: number }) {
+export async function getSocfortressAlerts(
+  integrationId: string,
+  options?: { limit?: number; fromDate?: Date; toDate?: Date },
+) {
   try {
     const credentials = await getSocfortressCredentials(integrationId)
     const conn = await getConnection(credentials)
 
     console.log(`[SOCFortress] Connecting to ${credentials.host}:${credentials.port}/${credentials.database}`)
     
-    const alerts = await fetchUnlinkedAlerts(conn, options?.limit || 500)
+    const alerts = await fetchUnlinkedAlerts(conn, options?.limit || 500, {
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+    })
     
     console.log(`[SOCFortress] Raw query returned ${alerts.length} alerts`)
 
@@ -791,12 +945,15 @@ export async function getSocfortressAlerts(integrationId: string, options?: { li
 /**
  * Get cases from SOCFortress with related alerts
  */
-export async function getSocfortressCases(integrationId: string, options?: { limit?: number }) {
+export async function getSocfortressCases(integrationId: string, options?: { limit?: number; fromDate?: Date; toDate?: Date }) {
   try {
     const credentials = await getSocfortressCredentials(integrationId)
     const conn = await getConnection(credentials)
 
-    const cases = await fetchRecentCases(conn, options?.limit || 50)
+    const cases = await fetchRecentCases(conn, options?.limit || 50, {
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+    })
 
     console.log(`[SOCFortress] Fetched ${cases.length} cases`)
 
@@ -831,7 +988,7 @@ export async function getSocfortressCases(integrationId: string, options?: { lim
               }
               return ms
             })
-            .filter((ts: number | null) => ts !== null && ts > 0)
+            .filter((ts: number | null): ts is number => ts !== null && ts > 0)
           
           if (alertTimestamps.length > 0 && caseCreatedMs) {
             const latestAlertMs = Math.max(...alertTimestamps)
@@ -916,6 +1073,28 @@ export async function getSocfortressCases(integrationId: string, options?: { lim
 }
 
 /**
+ * Read comments directly from incident_management_comment table.
+ * This is the authoritative source for comment text, since the
+ * alert_history table only stores a generic "New comment added" placeholder.
+ */
+export async function getIncidentComments(
+  integrationId: string,
+  alertId: string | number,
+): Promise<{ id: number; alert_id: number; comment: string; user_name: string; created_at: string }[]> {
+  const credentials = await getSocfortressCredentials(integrationId)
+  const conn = await getConnection(credentials)
+  try {
+    const [rows] = await conn.execute<any[]>(
+      "SELECT id, alert_id, comment, user_name, created_at FROM incident_management_comment WHERE alert_id = ? ORDER BY created_at ASC",
+      [Number(alertId)],
+    )
+    return rows
+  } finally {
+    await conn.end()
+  }
+}
+
+/**
  * Update alert status in SOCFortress
  */
 export async function updateSocfortressAlertStatus(
@@ -926,6 +1105,8 @@ export async function updateSocfortressAlertStatus(
     comments?: string
     assignedTo?: string
     severity?: string
+    tagsToAdd?: string[]
+    tagsToDelete?: string[]
   },
 ): Promise<boolean> {
   try {
@@ -939,6 +1120,8 @@ export async function updateSocfortressAlertStatus(
       options?.comments,
       options?.assignedTo,
       options?.severity,
+      options?.tagsToAdd,
+      options?.tagsToDelete,
     )
 
     // Close connection
@@ -1056,6 +1239,34 @@ export async function createSocfortressCase(
     }
   } catch (error) {
     console.error("[SOCFortress] Error creating case:", error)
+    throw error
+  }
+}
+
+/**
+ * Get all users from SOCFortress
+ */
+export async function getSocfortressUsers(integrationId: string) {
+  try {
+    const credentials = await getSocfortressCredentials(integrationId)
+    const conn = await getConnection(credentials)
+
+    console.log(`[SOCFortress] Fetching users from ${credentials.host}:${credentials.port}/${credentials.database}`)
+
+    const [users] = await conn.execute(
+      `SELECT id, username, email 
+       FROM user 
+       ORDER BY id ASC`,
+    ) as any[]
+
+    // Close connection
+    await conn.end()
+
+    console.log(`[SOCFortress] Fetched ${users.length} users`)
+
+    return users || []
+  } catch (error) {
+    console.error("[SOCFortress] Error getting users:", error)
     throw error
   }
 }

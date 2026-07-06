@@ -7,6 +7,7 @@ const httpsAgent = new https.Agent({
 interface QRadarCredentials {
   host: string
   api_key: string
+  domain_id?: number
 }
 
 interface OffenseResponse {
@@ -79,11 +80,13 @@ interface EventResponse {
 export class QRadarClient {
   private credentials: QRadarCredentials
   private baseUrl: string
+  private domainId?: number
 
   constructor(credentials: QRadarCredentials) {
     // Normalize host: remove protocol and trailing slash
     const normalizedHost = credentials.host.replace(/^https?:\/\//i, "").replace(/\/$/, "")
     this.credentials = { ...credentials, host: normalizedHost }
+    this.domainId = credentials.domain_id
     this.baseUrl = `https://${normalizedHost}/api`
   }
 
@@ -166,178 +169,121 @@ export class QRadarClient {
   async getRelatedEvents(offenseId: number, timeRangeHours = 24): Promise<EventResponse[]> {
     console.log("[v0] QRadar: Fetching related events for offense:", offenseId)
 
-    // Submit AQL query with comprehensive field selection
-    const query = `
+    const safeHours = Number.isFinite(timeRangeHours)
+      ? Math.min(12, Math.max(1, Math.floor(timeRangeHours)))
+      : 12
+
+    const buildBaseRelatedEventsQuery = (hours: number) => `
       SELECT 
         starttime, endtime, sourceip, destinationip, sourceport, destinationport,
-        protocolid, eventcount, magnitude, identityip, username, 
-        logsourceid, qid, category, severity, credibility, relevance,
-        domainid, eventdirection, postnatdestinationip, postnatsourceip,
-        prenatdestinationip, prenatsourceip, UTF8(payload) as payload,
-        EventID, QIDNAME(qid) as event_name,
-        logsourceidentifier,
-        highlevelcategory,
-        msg,
-        AccountName,
-        Command,
-        Description,
-        "EC File Path",
-        "EC Filename",
-        "EC Image",
-        "EC ImageName", 
-        "EC ImageTempPath",
-        "EC MD5 Hash",
-        "PS Encoded Command",
-        "EC ParentImage",
-        "EC ParentImageName",
-        "EC Process Id",
-        "Process ID",
-        EventCategory,
-        EventType,
-        "@type",
-        "File Directory",
-        "File Path",
-        Filename,
-        "Logon Account Domain",
-        "Logon Account Name", 
-        "Logon Type",
-        "Object Name",
-        ObjectName,
-        "Object Type",
-        ObjectType,
-        "Parent Command",
-        "Parent Process Name",
-        "Parent Process Path",
-        "Process Name",
-        "Process Path",
-        Product,
-        "CEF Product Name",
-        "SHA1 Hash",
-        "SHA256 Hash",
-        Source,
-        "Source Workstation",
-        "Status Code",
-        "Subject Account Name",
-        "Target Username",
-        "Target User Name",
-        User,
-        "User Domain",
-        "malware family",
-        "Threat Family",
-        FwdDomain,
-        sourceaddress,
-        callerIp,
-        "Source Asset",
-        "Destination Asset",
-        sourcemac,
-        destinationmac,
-        Application,
-        App,
-        "Effective User ID",
-        "Parent Process ID",
-        "User ID",
-        ActionFlags,
-        Bytes,
-        "Bytes Received",
-        BytesReceived,
-        "Bytes Sent", 
-        BytesSent,
-        "Content Type",
-        "Destination Zone",
-        DestinationZone,
-        "Device Name",
-        DeviceName,
-        "Elapsed Time",
-        ElapsedTime,
-        Flags,
-        IngressInterface,
-        EgressInterface,
-        "LEEF Event ID",
-        Packets,
-        "Packets Received",
-        "Packets Sent",
-        "Paloalto Log Type",
-        "Paloalto RuleID",
-        "Paloalto Rule ID",
-        ParentSessionID,
-        RepeatCount,
-        "Rule Name",
-        RuleName,
-        SessionID,
-        "Source Zone",
-        SourceZone,
-        TunnelID,
-        URL,
-        URLCategory,
-        "Web Category",
-        dstBytes,
-        dstPackets,
-        proto,
-        srcBytes,
-        srcPackets,
-        totalBytes,
-        totalPackets,
-        storedforperformance,
-        devicetime,
-        timestamp,
-        suser
-      FROM events 
-      WHERE INOFFENSE(${offenseId}) 
-      ORDER BY starttime DESC
-      LAST 7 DAYS
+        protocolid, eventcount, magnitude, username, logsourceid, qid,
+        category, severity, credibility, relevance, msg, payload
+      FROM events
+      WHERE INOFFENSE(${offenseId})
+      LAST ${hours} HOURS
     `
+
+    const buildEnrichedRelatedEventsQuery = (hours: number) => `
+      SELECT
+        starttime, endtime, sourceip, destinationip, sourceport, destinationport,
+        protocolid, eventcount, magnitude, username, logsourceid, qid,
+        category, severity, credibility, relevance, msg, payload,
+        QIDNAME(qid) AS event_name
+      FROM events
+      WHERE INOFFENSE(${offenseId})
+      LAST ${hours} HOURS
+    `
+
+    const executeRelatedEventsQuery = async (hours: number) => {
+      try {
+        // Try enriched query with QIDNAME first
+        console.log(`[v0] QRadar: Attempting enriched query with QIDNAME for offense ${offenseId}`)
+        return await this.executeAQL(buildEnrichedRelatedEventsQuery(hours), 15)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[v0] QRadar: Enriched QIDNAME query failed for offense ${offenseId}: ${message.substring(0, 200)}`)
+        console.log(`[v0] QRadar: Falling back to base query without event_name`)
+        try {
+          return await this.executeAQL(buildBaseRelatedEventsQuery(hours), 15)
+        } catch (baseError) {
+          const baseMessage = baseError instanceof Error ? baseError.message : String(baseError)
+          console.error(`[v0] QRadar: Base query also failed: ${baseMessage.substring(0, 100)}`)
+          throw baseError
+        }
+      }
+    }
+
+    try {
+      return await executeRelatedEventsQuery(safeHours)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes("timeout") && safeHours > 3) {
+        console.warn(`[v0] QRadar: related-events timeout for offense ${offenseId} at ${safeHours}h, retrying with 3h window`)
+        return executeRelatedEventsQuery(3)
+      }
+      throw error
+    }
+  }
+
+  async executeAQL(aqlQuery: string, maxResults = 50): Promise<any[]> {
+    console.log("[v0] QRadar: Executing AQL:", aqlQuery.substring(0, 100) + "...")
 
     // Submit search
     const searchResponse = await this.makeRequest<{
       search_id: string
       record_count: number
       status: string
-    }>("POST", "/ariel/searches", { query_expression: query })
+    }>("POST", "/ariel/searches", { query_expression: aqlQuery })
 
     const searchId = searchResponse.search_id
     console.log("[v0] QRadar: Search submitted with ID:", searchId)
 
-    // Poll for completion
+    // Poll for completion (default max 8 minutes; configurable)
     let completed = false
     let attempts = 0
-    const maxAttempts = 60 // 5 minutes with 5-second intervals (was 120 = 10 minutes)
+    const maxAttempts = Number(process.env.QRADAR_AQL_MAX_ATTEMPTS || 96)
 
     while (!completed && attempts < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 5000)) // Wait 5 seconds
+      await new Promise((resolve) => setTimeout(resolve, 5000))
 
       const statusResponse = await this.makeRequest<{
         status: string
         progress: number
         record_count: number
-        processed_record_count: number
         error_messages?: string[]
       }>("GET", `/ariel/searches/${searchId}`)
 
-      console.log("[v0] QRadar: Search status:", statusResponse.status, "Progress:", statusResponse.progress + "%")
+      console.log("[v0] QRadar: AQL status:", statusResponse.status, "Progress:", statusResponse.progress + "%")
 
       if (statusResponse.status === "COMPLETED") {
         completed = true
       } else if (statusResponse.status === "ERROR" || statusResponse.status === "CANCELED") {
-        throw new Error(`QRadar search failed: ${statusResponse.status}`)
+        throw new Error(`QRadar AQL search failed: ${statusResponse.status}`)
       }
 
       attempts++
     }
 
     if (!completed) {
-      throw new Error("QRadar search timeout")
+      throw new Error("QRadar AQL search timeout")
     }
 
-    // Get results - limit to 50 events (0-49)
-    const resultsResponse = await this.makeRequest<{
-      events: EventResponse[]
-    }>("GET", `/ariel/searches/${searchId}/results`, undefined, {
-      Range: "items=0-49",
-    })
+    const resultsResponse = await this.makeRequest<{ events: any[] }>(
+      "GET",
+      `/ariel/searches/${searchId}/results`,
+      undefined,
+      { Range: `items=0-${maxResults - 1}` },
+    )
 
     const events = resultsResponse.events || []
-    console.log("[v0] Fetched", events.length, "related events (limited to 25)")
-    return events.slice(0, 50)
+    console.log("[v0] QRadar: AQL returned", events.length, "results")
+    
+    // Log first event structure for debugging
+    if (events.length > 0) {
+      console.log("[v0] QRadar: First event structure:", JSON.stringify(events[0], null, 2))
+    }
+    
+    return events.slice(0, maxResults)
   }
 
   async updateOffenseStatus(
@@ -346,7 +292,7 @@ export class QRadarClient {
     assignedTo?: string,
     closingReasonId?: number,
   ): Promise<OffenseResponse> {
-    console.log("[v0] QRadar: Updating offense", offenseId, "to status:", status)
+    console.log("[v0] QRadar: Updating offense", offenseId, "to status:", status, "with assignee:", assignedTo)
 
     const params: Record<string, any> = {
       status: status === "FOLLOW_UP" ? "OPEN" : status,
@@ -364,11 +310,65 @@ export class QRadarClient {
       params.closing_reason_id = closingReasonId
     }
 
+    // Include domain_id if configured
+    if (this.domainId) {
+      params.domain_id = this.domainId
+    }
+
+    console.log("[v0] QRadar: Request params:", JSON.stringify(params))
+
     return this.makeRequest<OffenseResponse>("POST", `/siem/offenses/${offenseId}`, params)
   }
 
   async getClosingReasons(): Promise<Array<{ id: number; text: string }>> {
     console.log("[v0] QRadar: Fetching closing reasons")
     return this.makeRequest<Array<{ id: number; text: string }>>("GET", "/siem/offense_closing_reasons")
+  }
+
+  async createNote(
+    offenseId: number,
+    noteText: string,
+  ): Promise<{ id: number; create_time: number; username: string; note_text: string }> {
+    console.log("[v0] QRadar: Creating note on offense", offenseId)
+
+    const params = {
+      note_text: noteText,
+    }
+
+    return this.makeRequest<{ id: number; create_time: number; username: string; note_text: string }>(
+      "POST",
+      `/siem/offenses/${offenseId}/notes`,
+      params,
+    )
+  }
+
+  async getOffenseNotes(
+    offenseId: number,
+  ): Promise<Array<{ id: number; create_time: number; username: string; note_text: string }>> {
+    console.debug("[v0] QRadar: Fetching notes for offense", offenseId)
+
+    return this.makeRequest<
+      Array<{ id: number; create_time: number; username: string; note_text: string }>
+    >("GET", `/siem/offenses/${offenseId}/notes`)
+  }
+
+  async getUsers(): Promise<Array<{ id: string; username: string }>> {
+    console.log("[v0] QRadar: Fetching deployed users")
+    
+    interface QRadarUserResponse {
+      id?: number
+      username: string
+      email?: string
+      description?: string
+      [key: string]: any
+    }
+    
+    const users = await this.makeRequest<QRadarUserResponse[]>("GET", "/config/access/users")
+    
+    // Map QRadar users to simple id/username format (use username as ID)
+    return users.map(user => ({
+      id: user.username,
+      username: user.username
+    }))
   }
 }

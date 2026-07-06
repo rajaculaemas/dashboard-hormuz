@@ -307,6 +307,98 @@ export async function getAccessToken(integrationId?: string): Promise<string> {
 }
 
 /**
+ * Search raw events from Stellar Cyber Elasticsearch indices.
+ * Supports index patterns: aella-ser-* (alerts), aella-signals-*, aella-syslog-*,
+ * aella-wineventlog-*, aella-maltrace-*, aella-cloudtrail-*, aella-adr-*, aella-audit-*.
+ * NOTE: avoid aella-* (all-index wildcard) — too broad, causes 504 timeouts.
+ */
+export async function searchStellarEvents(params: {
+  integrationId: string
+  indexPattern?: string   // default: "aella-ser-*"
+  query?: string          // free-text or field:value Lucene query
+  srcIp?: string
+  dstIp?: string
+  timeRange?: string      // "1h" | "6h" | "12h" | "24h" | "7d"
+  limit?: number
+}): Promise<{ events: any[]; total: number; index: string }> {
+  const {
+    integrationId,
+    indexPattern = "aella-ser-*",
+    query,
+    srcIp,
+    dstIp,
+    timeRange = "24h",
+    limit = 20,
+  } = params
+
+  const { HOST, TENANT_ID } = await getStellarCyberCredentials(integrationId)
+
+  if (!HOST || HOST === "localhost") {
+    throw new Error("Stellar Cyber host not configured")
+  }
+  if (!TENANT_ID) {
+    throw new Error("Stellar Cyber tenant ID not configured")
+  }
+
+  const token = await getAccessToken(integrationId)
+  if (!token || token.includes("dummy") || token.includes("error")) {
+    throw new Error("Failed to obtain Stellar Cyber access token")
+  }
+
+  const hours: Record<string, number> = {
+    "1h": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "24h": 24, "7d": 168,
+  }
+  const fromTime = new Date(Date.now() - (hours[timeRange] || 24) * 60 * 60 * 1000)
+  const toTime = new Date()
+
+  // Build Lucene query — follow same pattern as getStellarCyberAlerts
+  const clauses: string[] = [`tenantid:${TENANT_ID}`]
+  clauses.push(`timestamp:[${fromTime.toISOString()} TO ${toTime.toISOString()}]`)
+  if (srcIp) clauses.push(`srcip:${srcIp}`)
+  if (dstIp) clauses.push(`dstip:${dstIp}`)
+  if (query) clauses.push(query)
+
+  const queryParams = new URLSearchParams({
+    q: clauses.join(" AND "),
+    size: limit.toString(),
+    sort: "timestamp:desc",
+  })
+
+  const url = `https://${HOST}/connect/api/data/${indexPattern}/_search?${queryParams.toString()}`
+  console.log(`[StellarCyber] searchStellarEvents URL: ${url}`)
+
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Stellar Cyber search failed: ${response.status} ${text.slice(0, 200)}`)
+    }
+
+    const data = await response.json()
+    const hits = data?.hits?.hits || []
+    const total = data?.hits?.total?.value ?? data?.hits?.total ?? hits.length
+
+    const events = hits.map((h: any) => ({
+      id: h._id,
+      index: h._index,
+      ...h._source,
+    }))
+
+    return { events, total, index: indexPattern }
+  } finally {
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  }
+}
+
+/**
  * Get list of users from Stellar Cyber
  * Requires admin credentials (USER_ID + REFRESH_TOKEN)
  */
@@ -391,7 +483,7 @@ export async function getAlerts(params: {
   startTime?: string
   endTime?: string
 }): Promise<StellarCyberAlert[]> {
-  const { minScore = 0, status, sort = "timestamp", order = "desc", limit = 100, page = 1, integrationId, daysBack = 7, startTime, endTime } = params
+  const { minScore = 0, status, sort = "timestamp", order = "desc", limit = 500, page = 1, integrationId, daysBack = 7, startTime, endTime } = params
   const { HOST, TENANT_ID } = await getStellarCyberCredentials(integrationId)
 
   if (!HOST || !TENANT_ID) {
@@ -550,14 +642,15 @@ export async function getAlerts(params: {
         metadata: {
           // Basic alert info
           alert_id: hit._id,
-          alert_index: hit._index,
+          // Clean up alert_index - remove trailing dashes that cause Stellar Cyber 422 errors
+          alert_index: (hit._index || "").trim().replace(/\-+$/, ""),
           cust_id: source.cust_id || source.customer_id || "",
           alert_time: convertTimestamp(stellar.alert_time),
           severity: mapSeverityToString(source.severity),
           event_status: source.event_status,
           alert_type: source.event_type,
           closed_time: convertTimestamp(user_action.last_timestamp),
-          assignee: source.assignee,
+          stellar_assignee: source.assignee,
           tenant_name: source.tenant_name,
           timestamp: convertTimestamp(source.timestamp),
 
@@ -707,13 +800,21 @@ export async function getAlerts(params: {
           ...source.metadata,
           // IMPORTANT: Store full user_action object so SLA Dashboard can calculate MTTD from history
           user_action: source.user_action,
-          index:
+          // Store top-level fields that are used for tagging and assignment in Stellar Cyber
+          // These are at top-level in the API response but need to be in metadata for consistency
+          event_tags: source.event_tags || [],  // Array of {tag: string} objects
+          assignee: source.assignee,  // Direct assignee field (in addition to metadata.assignee)
+          comments: source.comments || [],  // Array of comment objects
+          // Clean up index - remove trailing dashes that cause Stellar Cyber 422 errors
+          index: (
             (source as any).stellar_index ||
             (source as any).stellar_index_id ||
             (source as any).orig_index ||
             (source as any).index ||
             (source as any)._index ||
-            (source.metadata && (source.metadata as any).index),
+            (source.metadata && (source.metadata as any).index) ||
+            ""
+          ).toString().trim().replace(/\-+$/, ""),
         },
       }
     })
@@ -773,30 +874,88 @@ export async function updateAlertStatus(params: {
   }
 
   try {
-    console.log(`[StellarCyber] Fetching JWT API key for user ${userId}`)
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { stellarCyberApiKey: true },
+    console.log(`[StellarCyber] Fetching JWT API key for user ${userId} and integration ${integrationId}`)
+    
+    // Get integration to extract host
+    const integration = await prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { credentials: true },
     })
-    userJwtKey = user?.stellarCyberApiKey || null
+
+    if (!integration?.credentials) {
+      console.error("[StellarCyber] Integration credentials not found")
+      return {
+        success: false,
+        message: "Integration credentials not found",
+      }
+    }
+
+    // Extract host from integration credentials
+    let hostFromIntegration: string | null = null
+    const credentials = Array.isArray(integration.credentials)
+      ? integration.credentials
+      : [integration.credentials]
+
+    for (const cred of credentials) {
+      if (typeof cred === "object" && cred !== null && "host" in cred) {
+        hostFromIntegration = cred.host as string
+        break
+      }
+    }
+
+    if (!hostFromIntegration) {
+      console.warn("[StellarCyber] Host not found in integration credentials")
+      return {
+        success: false,
+        message: "Stellar Cyber host not configured in integration settings",
+      }
+    }
+
+    console.log(`[StellarCyber] Host from integration: ${hostFromIntegration}`)
+
+    // Try to get per-host JWT key (new system)
+    if (hostFromIntegration) {
+      const hostKey = await prisma.userStellarCyberHostCredential.findUnique({
+        where: {
+          userId_host: {
+            userId,
+            host: hostFromIntegration,
+          },
+        },
+        select: { apiKey: true },
+      })
+      userJwtKey = hostKey?.apiKey || null
+
+      if (userJwtKey) {
+        console.log(`[StellarCyber] ✓ Found JWT API key for host ${hostFromIntegration}`)
+      }
+    }
+
+    // Fallback to old global JWT key if per-host key not found
+    if (!userJwtKey) {
+      console.log(`[StellarCyber] No per-host key found, trying global JWT key...`)
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { stellar_cyber_api_key: true },
+      })
+      userJwtKey = user?.stellar_cyber_api_key || null
+
+      if (userJwtKey) {
+        console.log(`[StellarCyber] ✓ Using global JWT API key from user ${userId}`)
+      }
+    }
 
     if (!userJwtKey || userJwtKey.trim() === "") {
-      console.warn(`[StellarCyber] User ${userId} does not have Stellar Cyber JWT API key configured`)
+      console.warn(`[StellarCyber] User ${userId} does not have Stellar Cyber API key configured for host ${hostFromIntegration}`)
       return {
         success: false,
         requiresSetup: true,
-        message: "You must configure your Stellar Cyber JWT API key in Profile Settings before updating alerts",
+        message: `You must configure your Stellar Cyber API key for this host in Profile Settings before updating alerts`,
         setupUrl: "/dashboard/profile",
       }
     }
 
     console.log(`[StellarCyber] ✓ Using JWT API key from user ${userId}`)
-
-    // Get HOST from integration
-    const integration = await prisma.integration.findUnique({
-      where: { id: integrationId },
-      select: { credentials: true },
-    })
 
     if (integration?.credentials) {
       let credentials: Record<string, any> = {}
@@ -854,27 +1013,10 @@ export async function updateAlertStatus(params: {
       }
     }
 
-    // Step 2: Prepare update payload
-    const payload: any = {
-      index,
-      _id: alertId,
-    }
-
-    if (status) {
-      payload.status = status
-    }
-
-    if (comments) {
-      payload.comments = comments
-    }
-
-    // NOTE: Stellar Cyber API does NOT support "assignee" field
-    // Assignee is only supported by Socfortress and QRadar integrations
-    // Do NOT add assignee to the payload for Stellar Cyber
-
-    // Handle tags with add/delete operations
+    // Step 2: Prepare tags array for update
     const eventTags: any[] = []
 
+    // Handle tags with add/delete operations
     if (tagsToAdd && tagsToAdd.length > 0) {
       for (const tag of tagsToAdd) {
         if (tag && String(tag).trim()) {
@@ -897,26 +1039,39 @@ export async function updateAlertStatus(params: {
       }
     }
 
-    if (eventTags.length > 0) {
-      payload.event_tags = eventTags
-    }
-
-    console.log("[StellarCyber] Update payload:", JSON.stringify(payload, null, 2))
-
-    // Step 3: Call update endpoint
-    const updateUrl = `https://${stellarHost}/connect/api/update_ser`
+    // Step 3: Call update endpoint - use official Stellar Cyber API endpoint
+    // POST /security_events/{index}/{id} - supports status, comments, and tags
+    const updateUrl = `https://${stellarHost}/connect/api/v1/security_events/${index}/${alertId}`
 
     console.log(`[StellarCyber] Calling POST ${updateUrl}`)
 
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
     try {
+      // Prepare payload for Stellar Cyber API
+      const stellarPayload: any = {}
+
+      if (status) {
+        stellarPayload.status = status
+      }
+
+      if (comments) {
+        stellarPayload.comments = comments
+      }
+
+      // Only include event_tags if there are tags to add/delete
+      if (eventTags.length > 0) {
+        stellarPayload.event_tags = eventTags
+      }
+
+      console.log("[StellarCyber] Stellar API payload:", JSON.stringify(stellarPayload, null, 2))
+
       const response = await fetch(updateUrl, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(stellarPayload),
       })
 
       console.log(`[StellarCyber] Update response status: ${response.status}`)

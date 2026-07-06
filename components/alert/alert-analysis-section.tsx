@@ -35,7 +35,10 @@ export function AlertAnalysisSection({ alertId, integrationId, refreshTrigger }:
     try {
       setLoading(true);
       const response = await fetch(`/api/alerts/${alertId}/analyses`);
-      if (!response.ok) throw new Error('Failed to fetch analyses');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`HTTP ${response.status}: ${errorData.error || 'Failed to fetch analyses'}`);
+      }
 
       const data = await response.json();
       setAnalyses(data.analyses || []);

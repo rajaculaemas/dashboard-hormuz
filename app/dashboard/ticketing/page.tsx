@@ -241,7 +241,7 @@ export default function WazuhTicketingPage() {
                           <div>
                             <p className="text-sm text-muted-foreground">Status</p>
                             <Badge variant={getStatusColor(wazuhCase.status)}>
-                              {wazuhCase.status === "in_progress" ? "In Progress" : wazuhCase.status}
+                              {wazuhCase.status}
                             </Badge>
                           </div>
 

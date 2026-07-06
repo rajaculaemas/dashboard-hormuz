@@ -168,7 +168,8 @@ export class TelegramPollingService {
 
         // Handle "Reply with Analysis" button
         if (data.startsWith("reply_esc_")) {
-          await this.handleReplyAnalysisButton(chatId, messageId, callbackId)
+          const escalationId = data.replace("reply_esc_", "")
+          await this.handleReplyAnalysisButton(chatId, messageId, callbackId, escalationId)
           return
         }
       }
@@ -426,7 +427,7 @@ export class TelegramPollingService {
       console.log(`[Telegram] 🔍 Step 1: Searching by replyToMessageId=${replyToMessageId}...`)
       let escalation = await prisma.alertEscalation.findFirst({
         where: {
-          status: "pending",
+          status: { in: ["pending", "replied"] },  // ← Allow both statuses!
           telegramChatId: chatId,
           telegramMessageId: String(replyToMessageId),
         },
@@ -437,27 +438,57 @@ export class TelegramPollingService {
       })
 
       if (escalation) {
-        console.log(`[Telegram] ✅ Found escalation by message ID: ${escalation.id}`)
+        console.log(`[Telegram] ✅ Found escalation by message ID: ${escalation.id} (status: ${escalation.status})`)
       }
 
-      // If not found, try finding the most recent pending escalation for this chat
-      // (in case user replied to prompt message instead of escalation message)
+      // If not found, try searching in responses (conversation chain)
+      // This handles replies to prompt messages or previous responses
       if (!escalation) {
-        console.log(`[Telegram] 🔍 Step 2: Searching most recent pending escalation for chat ${chatId}...`)
+        console.log(`[Telegram] 🔍 Step 2: Searching in responses table for replyToMessageId=${replyToMessageId}...`)
+        const response = await prisma.alertEscalationResponse.findFirst({
+          where: {
+            telegramMessageId: String(replyToMessageId),
+            escalation: {
+              telegramChatId: chatId,
+              status: { in: ["pending", "replied"] },
+            },
+          },
+          include: {
+            escalation: {
+              include: {
+                alert: true,
+                escalatedTo: true,
+              },
+            },
+          },
+        })
+
+        if (response?.escalation) {
+          escalation = response.escalation
+          console.log(`[Telegram] ✅ Found escalation from response chain: ${escalation.id} (status: ${escalation.status})`)
+        }
+      }
+
+      // If still not found, try finding the most recent active escalation for this chat
+      // (fallback for edge cases)
+      if (!escalation) {
+        console.log(`[Telegram] 🔍 Step 3: Searching most recent active escalation for chat ${chatId}...`)
         escalation = await prisma.alertEscalation.findFirst({
           where: {
-            status: "pending",
+            status: { in: ["pending", "replied"] },
             telegramChatId: chatId,
           },
           include: {
             alert: true,
             escalatedTo: true,
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: { updatedAt: "desc" },
         })
 
         if (escalation) {
-          console.log(`[Telegram] ✅ Found most recent escalation: ${escalation.id}`)
+          console.log(
+            `[Telegram] ✅ Found most recent active escalation: ${escalation.id} (status: ${escalation.status}, updated: ${escalation.updatedAt})`,
+          )
           console.log(`[Telegram]    - AlertID: ${escalation.alertId}`)
           console.log(`[Telegram]    - EscalationLevel: ${escalation.escalationLevel}`)
           console.log(`[Telegram]    - EscalatedTo: ${escalation.escalatedTo?.name}`)
@@ -492,6 +523,24 @@ export class TelegramPollingService {
       }
 
       console.log(`[Telegram] 💾 Saving response to database...`)
+
+      // Delete placeholder response if it exists (AWAITING_ANALYSIS_INPUT marker)
+      if (replyToMessageId) {
+        try {
+          const deleted = await prisma.alertEscalationResponse.deleteMany({
+            where: {
+              escalationId: escalation.id,
+              telegramMessageId: String(replyToMessageId),
+              analysis: "AWAITING_ANALYSIS_INPUT",
+            },
+          })
+          if (deleted.count > 0) {
+            console.log(`[Telegram] 🧹 Deleted ${deleted.count} placeholder response record(s)`)
+          }
+        } catch (err) {
+          console.warn(`[Telegram] Warning: Failed to delete placeholder:`, err instanceof Error ? err.message : err)
+        }
+      }
 
       // Save response
       const response = await prisma.alertEscalationResponse.create({
@@ -531,15 +580,19 @@ export class TelegramPollingService {
 
       console.log(`[Telegram] ✅ Escalation updated: status=${updatedEscalation.status}`)
 
-      // Send confirmation
+      // Send confirmation with buttons for L2
       let confirmMessage = `✅ <b>Analysis Received</b>\n\n`
       confirmMessage += `Your analysis has been saved:\n`
-      confirmMessage += `• <b>Verdict:</b> ${parsed.conclusion}\n\n`
+      confirmMessage += `• <b>waiting for L1 reply </b>\n\n`
 
       if (escalation.escalationLevel === 1) {
         confirmMessage += `<b>Next Steps:</b>\n`
-        confirmMessage += `• Click the <b>"🚀 Escalate to L3"</b> button below if you need further help\n`
-        confirmMessage += `• Or your analysis will be reviewed\n\n`
+        if (!parsed.shouldEscalate) {
+          confirmMessage += `• Click the <b>"🚀 Escalate to L3"</b> button below if you need further help\n`
+          confirmMessage += `• Or your analysis will be reviewed\n\n`
+        } else {
+          confirmMessage += `• Your response has been escalated to L3\n\n`
+        }
         confirmMessage += `<i>You have 30 minutes to respond</i>`
       } else {
         confirmMessage += `<b>Next Steps:</b>\n`
@@ -547,7 +600,20 @@ export class TelegramPollingService {
         confirmMessage += `<i>Thank you for your quick response!</i>`
       }
 
-      await this.sendMessage(chatId, confirmMessage, "HTML")
+      // Add buttons for L2 if not manually escalating
+      if (escalation.escalationLevel === 1 && !parsed.shouldEscalate) {
+        const buttons = [
+          [
+            {
+              text: "🚀 Escalate to L3",
+              callback_data: `escalate_l3_confirm_${escalation.id}`,
+            },
+          ],
+        ]
+        await this.sendMessageWithKeyboard(chatId, confirmMessage, buttons, "HTML")
+      } else {
+        await this.sendMessage(chatId, confirmMessage, "HTML")
+      }
       console.log(`[Telegram] ✅ Confirmation message sent`)
 
       // If escalating, escalate to L3
@@ -842,6 +908,7 @@ export class TelegramPollingService {
         selectedL3.telegramChatId,
         escalation.alert,
         2,
+        l3Escalation.id, // Pass escalationId so button contains it
         {
           l1: escalation.l1Analysis,
           l2: escalation.l2Analysis || "No analysis provided",
@@ -890,16 +957,73 @@ export class TelegramPollingService {
     chatId: string,
     messageId: number | undefined,
     callbackId: string,
+    escalationId: string,
   ): Promise<void> {
     try {
-      console.log(`[Telegram] Button click: reply_analysis from ${chatId}, message: ${messageId}, callback: ${callbackId}`)
+      console.log(`[Telegram] Button click: reply_analysis from ${chatId}, message: ${messageId}, callback: ${callbackId}, escalation: ${escalationId}`)
 
-      const messageText = `📋 <b>Provide Your Analysis</b>\n\n<b>Step 1:</b> Copy the format below\n<b>Step 2:</b> Reply to THIS message (tap reply icon)\n<b>Step 3:</b> Paste and fill in your analysis\n\n<code>ANALYSIS: [your detailed analysis]\nCONCLUSION: [verdict]</code>\n\n<b>Valid verdicts:</b>\n• TRUE POSITIVE\n• BENIGN TRUE POSITIVE  \n• FALSE_POSITIVE\n• ESCALATE_L3 (for L2 only)\n\n⚠️ <i>You MUST reply directly to this message!</i>`
+      const messageText = `📋 <b>Provide Your Analysis and reply to this message</b>\n\n⚠️ <i>You MUST reply (quotes) directly to this message!</i>`
 
       console.log(`[Telegram] Sending analysis prompt message...`)
       // Send as standalone message (not a reply to escalation message)
       const sendResult = await this.sendMessage(chatId, messageText, "HTML")
       console.log(`[Telegram] Message sent, result:`, sendResult?.result?.message_id)
+      
+      // Now create dummy response record to link this prompt message to the escalation
+      if (sendResult?.result?.message_id) {
+        try {
+          const promptMessageId = String(sendResult.result.message_id)
+          console.log(`[Telegram] 📝 Creating dummy response for escalation ${escalationId}, prompt message ${promptMessageId}...`)
+          
+          // Get L2 user info
+          console.log(`[Telegram] 🔄 Fetching escalation ${escalationId}...`)
+          const escalation = await prisma.alertEscalation.findUnique({
+            where: { id: escalationId },
+            select: { escalatedToUserId: true, telegramChatId: true, status: true },
+          })
+          
+          console.log(`[Telegram] Escalation fetch result:`, {
+            found: !!escalation,
+            escalatedToUserId: escalation?.escalatedToUserId,
+            telegramChatId: escalation?.telegramChatId,
+            status: escalation?.status,
+          })
+          
+          if (escalation?.escalatedToUserId) {
+            console.log(`[Telegram] 🔄 Upserting dummy response: escalationId=${escalationId}, telegarmMessageId=${promptMessageId}, responderId=${escalation.escalatedToUserId}...`)
+            
+            const result = await prisma.alertEscalationResponse.upsert({
+              where: {
+                escalationId_telegramMessageId: {
+                  escalationId,
+                  telegramMessageId: promptMessageId,
+                },
+              },
+              create: {
+                escalationId,
+                responderId: escalation.escalatedToUserId,
+                analysis: "AWAITING_ANALYSIS_INPUT",
+                conclusion: "PENDING",
+                action: "awaiting_response",
+                telegramMessageId: promptMessageId,
+              },
+              update: {},
+            })
+            console.log(`[Telegram] ✅ Stored prompt message link: ${promptMessageId} → escalation ${escalationId} (recordId: ${result.id})`)
+          } else {
+            console.error(`[Telegram] ❌ Escalation ${escalationId} not found or no escalatedToUserId. Fetch result:`, escalation)
+          }
+        } catch (err) {
+          console.error(`[Telegram] ❌ Failed to create dummy response for escalation ${escalationId}:`, {
+            error: err instanceof Error ? err.message : String(err),
+            errorType: err instanceof Error ? err.constructor.name : typeof err,
+            errorCode: (err as any)?.code,
+            details: (err as any)?.meta,
+          })
+        }
+      } else {
+        console.error(`[Telegram] ❌ sendMessage failed or no messageId in result:`, sendResult)
+      }
       
       const callbackResult = await this.answerCallback(
         callbackId,

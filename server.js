@@ -69,6 +69,66 @@ async function startServer() {
       })
     })
 
+    // Internal shift recap interval: check every 60 seconds
+    let shiftRecapIntervalStarted = false
+    setTimeout(() => {
+      // Wait 10 seconds after server ready before first check
+      const runShiftRecap = async () => {
+        try {
+          const secret = process.env.CRON_SECRET
+          if (!secret) return
+          const res = await fetch(`http://localhost:${port}/api/cron/shift-recap`, {
+            headers: { 'x-cron-secret': secret }
+          })
+          if (res.ok) {
+            const data = await res.json()
+            if (data.processed > 0) {
+              console.log(`[ShiftRecap] ✅ Sent ${data.processed} recap notification(s)`)
+            }
+          }
+        } catch (e) {
+          // Silently ignore - server may be mid-restart
+        }
+      }
+      runShiftRecap()
+      if (!shiftRecapIntervalStarted) {
+        shiftRecapIntervalStarted = true
+        setInterval(runShiftRecap, 60 * 1000)
+      }
+    }, 10000)
+
+    // Internal escalation timeout check: check every 30 seconds
+    let escalationTimeoutIntervalStarted = false
+    setTimeout(() => {
+      // Wait 5 seconds after server ready before first check
+      const runEscalationTimeoutCheck = async () => {
+        try {
+          const secret = process.env.CRON_SECRET
+          if (!secret) {
+            console.warn('[EscalationTimeout] CRON_SECRET not configured')
+            return
+          }
+          const res = await fetch(`http://localhost:${port}/api/cron/escalation-timeout-check`, {
+            headers: { 'x-cron-secret': secret }
+          })
+          if (res.ok) {
+            const data = await res.json()
+            console.log(`[EscalationTimeout] Check completed - ${data.message}`)
+          } else {
+            console.warn(`[EscalationTimeout] Check failed with status ${res.status}`)
+          }
+        } catch (e) {
+          console.error('[EscalationTimeout] Check error:', e.message)
+        }
+      }
+      runEscalationTimeoutCheck()
+      if (!escalationTimeoutIntervalStarted) {
+        escalationTimeoutIntervalStarted = true
+        console.log('[EscalationTimeout] ✅ Interval started - checking every 30 seconds')
+        setInterval(runEscalationTimeoutCheck, 30 * 1000)
+      }
+    }, 5000)
+
     // Graceful shutdown
     const shutdown = async (signal) => {
       if (shutdownInProgress) return

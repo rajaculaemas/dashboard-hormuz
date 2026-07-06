@@ -478,7 +478,7 @@ export async function getCases(params: { limit?: number; integrationId?: string 
     const response = await client.getCases({
       from: thirtyDaysAgo,
       to: now,
-      limit: params.limit || 1000,
+      limit: params.limit || 5000,
     })
 
     const cases = response.data?.cases || []
@@ -591,45 +591,81 @@ export async function updateCaseInStellarCyber(params: {
 
     if (params.userId) {
       try {
-        const user = await prisma.user.findUnique({
-          where: { id: params.userId },
-          select: { stellarCyberApiKey: true },
-        })
-        userApiKey = user?.stellarCyberApiKey || null
-
-        if (!userApiKey) {
-          console.warn(`User ${params.userId} does not have Stellar Cyber API key configured`)
-          return {
-            success: false,
-            message: "User does not have Stellar Cyber API key configured. Please add it in your profile settings.",
-          }
-        }
-
-        // Get HOST from integration for the API endpoint
-        const integration = await prisma.integration.findUnique({
+        // First try per-integration JWT key
+        // Get integration to extract host first
+        const integrationData = await prisma.integration.findUnique({
           where: { id: params.integrationId },
           select: { credentials: true },
         })
 
-        if (integration?.credentials) {
-          let credentials: Record<string, any> = {}
-          if (Array.isArray(integration.credentials)) {
-            const credentialsArray = integration.credentials as any[]
-            credentialsArray.forEach((cred) => {
-              if (cred && typeof cred === "object" && "key" in cred && "value" in cred) {
-                credentials[cred.key] = cred.value
-              }
-            })
-          } else {
-            credentials = (integration.credentials as Record<string, any>) || {}
+        if (!integrationData?.credentials) {
+          console.warn(`[StellarCase] Integration ${params.integrationId} credentials not found`)
+          return {
+            success: false,
+            message: "Integration credentials not configured",
           }
+        }
 
-          stellarHost =
-            credentials.host ||
-            credentials.STELLAR_CYBER_HOST ||
-            credentials.stellar_host ||
-            credentials.api_host ||
-            ""
+        // Extract host from integration credentials
+        let hostFromIntegration: string | null = null
+        const credentialsArray = Array.isArray(integrationData.credentials)
+          ? integrationData.credentials
+          : [integrationData.credentials]
+
+        for (const cred of credentialsArray) {
+          if (cred && typeof cred === "object" && "host" in cred) {
+            hostFromIntegration = (cred as any).host as string
+            stellarHost = hostFromIntegration
+            break
+          }
+        }
+
+        if (!hostFromIntegration) {
+          console.warn(`[StellarCase] Host not found in integration ${params.integrationId}`)
+          return {
+            success: false,
+            message: "Stellar Cyber host not configured",
+          }
+        }
+
+        // Try to get per-host API key (new system)
+        let userApiKey: string | null = null
+        if (hostFromIntegration) {
+          const hostKey = await prisma.userStellarCyberHostCredential.findUnique({
+            where: {
+              userId_host: {
+                userId: params.userId,
+                host: hostFromIntegration,
+              },
+            },
+            select: { apiKey: true },
+          })
+          userApiKey = hostKey?.apiKey || null
+
+          if (userApiKey) {
+            console.log(`[StellarCase] Using per-host API key for ${hostFromIntegration}`)
+          }
+        }
+
+        // Fallback to global JWT key
+        if (!userApiKey) {
+          const user = await prisma.user.findUnique({
+            where: { id: params.userId },
+            select: { stellar_cyber_api_key: true },
+          })
+          userApiKey = user?.stellar_cyber_api_key || null
+
+          if (userApiKey) {
+            console.log(`[StellarCase] Using global JWT key for user ${params.userId}`)
+          }
+        }
+
+        if (!userApiKey) {
+          console.warn(`[StellarCase] User ${params.userId} does not have Stellar Cyber API key configured for host ${hostFromIntegration}`)
+          return {
+            success: false,
+            message: "User does not have Stellar Cyber API key configured. Please add it in your profile settings.",
+          }
         }
       } catch (error) {
         console.error("Error fetching user Stellar API key:", error)

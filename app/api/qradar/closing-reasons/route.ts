@@ -27,9 +27,11 @@ export async function GET(request: NextRequest) {
       }
 
       console.log("[ClosingReasons API] Using default QRadar integration")
+      const domainId = creds.domain_id ? Number(creds.domain_id) : undefined
       const qradarClient = new QRadarClient({
         host: creds.host,
         api_key: creds.api_key,
+        domain_id: domainId,
       })
 
       const reasons = await qradarClient.getClosingReasons()

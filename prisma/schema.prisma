@@ -1,0 +1,552 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                    String                         @id @default(cuid())
+  email                 String                         @unique
+  name                  String?
+  createdAt             DateTime                       @default(now()) @map("created_at")
+  updatedAt             DateTime                       @updatedAt @map("updated_at")
+  password              String
+  role                  String                         @default("read-only")
+  status                String                         @default("active")
+  stellar_cyber_api_key String?
+  position              String?
+  telegramChatId        String?                        @map("telegram_chat_id")
+  analyses              AlertAnalysis[]                @relation("AuthorAnalysis")
+  escalationResponses   AlertEscalationResponse[]      @relation("Responder")
+  escalationsInitiated  AlertEscalation[]              @relation("EscalatedByUser")
+  escalationsReceived   AlertEscalation[]              @relation("EscalatedToUser")
+  escalationsClosed     AlertEscalation[]              @relation("ClosedByUser")
+  escalationResponsesL3 AlertEscalationResponse[]      @relation("EscalatedToUserL3")
+  attachmentsUploaded   EscalationAttachment[]
+  alertTimelines        AlertTimeline[]
+  assignedAlerts        Alert[]
+  assignedIntegrations  UserIntegration[]
+  caseTimelineEvents    WazuhCaseTimeline[]
+  assignedCases         WazuhCase[]
+  qradarCaseAssignments QRadarCase[]                   @relation("QRadarCaseAssignee")
+  qradarCaseTimeline    QRadarCaseTimeline[]           @relation("QRadarCaseTimelineUser")
+  stellarCyberCredentials UserStellarCyberCredential[]
+  stellarHostCredentials UserStellarCyberHostCredential[] @relation("StellarHostCredentials")
+  notifications         Notification[]
+
+  @@map("users")
+}
+
+model UserIntegration {
+  id            String      @id @default(cuid())
+  userId        String      @map("user_id")
+  integrationId String      @map("integration_id")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, integrationId])
+  @@map("user_integrations")
+}
+
+model UserStellarCyberCredential {
+  id            String      @id @default(cuid())
+  userId        String      @map("user_id")
+  integrationId String      @map("integration_id")
+  jwtApiKey     String      @map("jwt_api_key")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, integrationId])
+  @@map("user_stellar_cyber_credentials")
+}
+
+model UserStellarCyberHostCredential {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  host      String    // e.g. "100.100.11.61" or "100.100.11.68"
+  apiKey    String    @map("api_key")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  
+  user      User      @relation("StellarHostCredentials", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, host])
+  @@map("user_stellar_cyber_host_credentials")
+}
+
+model Integration {
+  id             String            @id @default(cuid())
+  name           String
+  source         String
+  status         String            @default("inactive")
+  config         Json              @default("{}")
+  credentials    Json?
+  createdAt      DateTime          @default(now()) @map("created_at")
+  lastSync       DateTime?         @map("last_sync")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  alerts         Alert[]
+  cases          Case[]
+  qradarOffenses QRadarOffense[]      @relation("QRadarOffenses")
+  assignedUsers  UserIntegration[]
+  stellarCyberCredentials UserStellarCyberCredential[]
+
+  @@map("integrations")
+}
+
+model Alert {
+  id                      String            @id @default(cuid())
+  title                   String
+  description             String?
+  severity                String?
+  status                  String            @default("Open")
+  timestamp               DateTime          @default(now())
+  metadata                Json?
+  integrationId           String
+  createdAt               DateTime          @default(now()) @map("created_at")
+  externalId              String            @unique @map("external_id")
+  updatedAt               DateTime          @updatedAt @map("updated_at")
+  assigneeId              String?
+  analysisNotes           String?           @map("analysis_notes")
+  severityBasedOnAnalysis String?           @map("severity_based_on_analysis")
+  escalations             AlertEscalation[]
+  timeline                AlertTimeline[]
+  assignee                User?             @relation(fields: [assigneeId], references: [id])
+  integration             Integration       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  relatedCases            CaseAlert[]
+  wazuhCaseAlerts         WazuhCaseAlert[]
+  qradarCaseAlerts        QRadarCaseAlert[]
+
+  @@map("alerts")
+}
+
+model AlertTimeline {
+  id              String   @id @default(cuid())
+  alertId         String   @map("alert_id")
+  eventType       String   @map("event_type")
+  description     String
+  oldValue        String?  @map("old_value")
+  newValue        String?  @map("new_value")
+  changedBy       String?  @map("changed_by")
+  changedByUserId String?  @map("changed_by_user_id")
+  timestamp       DateTime @default(now())
+  alert           Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  changedByUser   User?    @relation(fields: [changedByUserId], references: [id])
+
+  @@index([alertId])
+  @@map("alert_timeline")
+}
+
+model Case {
+  name           String
+  status         String
+  severity       String
+  assignee       String?       @map("assignee")
+  score          Float?
+  size           Int?
+  tags           String[]      @default([])
+  version        Int?
+  integrationId  String
+  acknowledgedAt DateTime?     @map("acknowledged")
+  assigneeName   String?       @map("assignee_name")
+  closedAt       DateTime?     @map("closed")
+  createdAt      DateTime?     @map("created_at")
+  createdBy      String?       @map("created_by")
+  createdByName  String?       @map("created_by_name")
+  custId         String?       @map("cust_id")
+  endTimestamp   DateTime?     @map("end_timestamp")
+  externalId     String?       @unique @map("external_id")
+  modifiedAt     DateTime?     @map("modified_at")
+  modifiedBy     String?       @map("modified_by")
+  modifiedByName String?       @map("modified_by_name")
+  startTimestamp DateTime?     @map("start_timestamp")
+  tenantName     String?       @map("tenant_name")
+  ticketId       Int           @map("ticket_id")
+  id             String        @id @unique @default(cuid())
+  description    String?
+  metadata       Json
+  relatedAlerts  CaseAlert[]
+  comments       CaseComment[]
+  integration    Integration   @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@map("cases")
+}
+
+model CaseAlert {
+  id      String @id @default(cuid())
+  alertId String @map("alert_id")
+  caseId  String @map("case_id")
+  alert   Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  case    Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, alertId])
+  @@map("case_alerts")
+}
+
+model CaseComment {
+  id        String   @id @default(cuid())
+  content   String
+  author    String
+  caseId    String   @map("case_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  case      Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@map("case_comments")
+}
+
+model QRadarOffense {
+  id              String        @id @default(cuid())
+  externalId      Int           @unique @map("external_id")
+  title           String
+  description     String?
+  severity        String
+  status          String        @default("OPEN")
+  offenseType     String?       @map("offense_type")
+  eventCount      Int?          @map("event_count")
+  lastUpdatedTime DateTime?     @map("last_updated_time")
+  startTime       DateTime      @default(now()) @map("start_time")
+  endTime         DateTime?     @map("end_time")
+  sourceIps       String[]      @default([]) @map("source_ips")
+  destinationIps  String[]      @default([]) @map("destination_ips")
+  domain          String?       @map("domain")
+  metadata        Json?         @default("{}")
+  integrationId   String
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  events          QRadarEvent[]
+  integration     Integration   @relation("QRadarOffenses", fields: [integrationId], references: [id], onDelete: Cascade)
+  ticket          QRadarTicket?
+
+  @@map("qradar_offenses")
+}
+
+model QRadarEvent {
+  id              String        @id @default(cuid())
+  externalId      String        @unique @map("external_id")
+  offenseId       Int           @map("offense_id")
+  eventType       String?       @map("event_type")
+  sourceIp        String?       @map("source_ip")
+  destinationIp   String?       @map("destination_ip")
+  protocol        String?
+  eventTimestamp  DateTime      @map("event_timestamp")
+  payload         Json?         @default("{}")
+  domain          String?       @map("domain")
+  qradarOffenseId String        @map("qradar_offense_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  destinationPort Int?          @map("destination_port")
+  eventName       String?       @map("event_name")
+  metadata        Json?         @default("{}")
+  severity        Int?
+  sourcePort      Int?          @map("source_port")
+  qradarOffense   QRadarOffense @relation(fields: [qradarOffenseId], references: [id], onDelete: Cascade)
+
+  @@map("qradar_events")
+}
+
+model QRadarTicket {
+  id              String        @id @default(cuid())
+  ticketNumber    String        @unique @map("ticket_number")
+  offenseId       Int           @unique @map("offense_id")
+  description     String?
+  status          String        @default("OPEN")
+  qradarOffenseId String        @unique @map("qradar_offense_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  qradarOffense   QRadarOffense @relation(fields: [qradarOffenseId], references: [id], onDelete: Cascade)
+
+  @@map("qradar_tickets")
+}
+
+model WazuhCase {
+  id          String              @id @default(cuid())
+  status      String              @default("open")
+  severity    String?
+  assigneeId  String?
+  description String?
+  notes       String?
+  alertCount  Int                 @default(0) @map("alert_count")
+  createdBy   String?
+  createdById String?
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+  resolvedAt  DateTime?           @map("resolved_at")
+  caseNumber  String              @unique @map("case_number")
+  title       String              @default("Untitled Case")
+  alerts      WazuhCaseAlert[]
+  timeline    WazuhCaseTimeline[]
+  assignee    User?               @relation(fields: [assigneeId], references: [id])
+
+  @@map("wazuh_cases")
+}
+
+model WazuhCaseTimeline {
+  id              String    @id @default(cuid())
+  caseId          String    @map("case_id")
+  eventType       String    @map("event_type")
+  description     String
+  oldValue        String?   @map("old_value")
+  newValue        String?   @map("new_value")
+  changedBy       String?   @map("changed_by")
+  changedByUserId String?   @map("changed_by_user_id")
+  timestamp       DateTime  @default(now())
+  case            WazuhCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  changedByUser   User?     @relation(fields: [changedByUserId], references: [id])
+
+  @@map("wazuh_case_timeline")
+}
+
+model WazuhCaseAlert {
+  id      String    @id @default(cuid())
+  caseId  String    @map("case_id")
+  alertId String    @map("alert_id")
+  addedAt DateTime  @default(now()) @map("added_at")
+  alert   Alert     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  case    WazuhCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, alertId])
+  @@map("wazuh_case_alerts")
+}
+
+model QRadarCase {
+  id          String              @id @default(cuid())
+  status      String              @default("open")
+  severity    String?
+  assigneeId  String?
+  description String?
+  notes       String?
+  alertCount  Int                 @default(0) @map("alert_count")
+  createdBy   String?
+  createdById String?
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+  resolvedAt  DateTime?           @map("resolved_at")
+  caseNumber  String              @unique @map("case_number")
+  title       String              @default("Untitled Case")
+  alerts      QRadarCaseAlert[]
+  timeline    QRadarCaseTimeline[]
+  assignee    User?               @relation("QRadarCaseAssignee", fields: [assigneeId], references: [id])
+
+  @@map("qradar_cases")
+}
+
+model QRadarCaseTimeline {
+  id              String    @id @default(cuid())
+  caseId          String    @map("case_id")
+  eventType       String    @map("event_type")
+  description     String
+  oldValue        String?   @map("old_value")
+  newValue        String?   @map("new_value")
+  changedBy       String?   @map("changed_by")
+  changedByUserId String?   @map("changed_by_user_id")
+  timestamp       DateTime  @default(now())
+  case            QRadarCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  changedByUser   User?     @relation("QRadarCaseTimelineUser", fields: [changedByUserId], references: [id])
+
+  @@map("qradar_case_timeline")
+}
+
+model QRadarCaseAlert {
+  id      String    @id @default(cuid())
+  caseId  String    @map("case_id")
+  alertId String    @map("alert_id")
+  addedAt DateTime  @default(now()) @map("added_at")
+  alert   Alert     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  case    QRadarCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, alertId])
+  @@map("qradar_case_alerts")
+}
+
+model AlertEscalation {
+  id                String                    @id @default(cuid())
+  alertId           String                    @map("alert_id")
+  escalationLevel   Int                       @default(1)
+  escalatedByUserId String                    @map("escalated_by_user_id")
+  escalatedToUserId String                    @map("escalated_to_user_id")
+  l1Analysis        String?                   @map("l1_analysis")
+  l2Analysis        String?                   @map("l2_analysis")
+  l3Analysis        String?                   @map("l3_analysis")
+  // Status lifecycle:
+  // "pending"    → L2 waiting to respond (initial state)
+  // "replied"    → L2 responded, L1 can reply or accept/escalate
+  // "escalated"  → Forwarded to L3 (no more L1 replies)
+  // "closed"     → L1 closed without escalation (completed)
+  status            String                    @default("pending")
+  telegramMessageId String?                   @map("telegram_message_id")
+  telegramChatId    String?                   @map("telegram_chat_id")
+  escalatedAt       DateTime                  @default(now()) @map("escalated_at")
+  repliedAt         DateTime?                 @map("replied_at")
+  timeoutAt         DateTime?                 @map("timeout_at")
+  resolvedAt        DateTime?                 @map("resolved_at")
+  closedAt          DateTime?                 @map("closed_at")
+  closedByUserId    String?                   @map("closed_by_user_id")
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+  responses         AlertEscalationResponse[]
+  attachments       EscalationAttachment[]
+  alert             Alert                     @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  escalatedBy       User                      @relation("EscalatedByUser", fields: [escalatedByUserId], references: [id])
+  escalatedTo       User                      @relation("EscalatedToUser", fields: [escalatedToUserId], references: [id])
+  closedBy          User?                     @relation("ClosedByUser", fields: [closedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([alertId])
+  @@index([escalatedToUserId])
+  @@index([status])
+  @@index([timeoutAt])
+  @@map("alert_escalations")
+}
+
+model AlertEscalationResponse {
+  id                String          @id @default(cuid())
+  escalationId      String          @map("escalation_id")
+  responderId       String          @map("responder_id")
+  analysis          String
+  conclusion        String
+  action            String
+  escalatedToId     String?         @map("escalated_to_id")
+  telegramMessageId String?         @map("telegram_message_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  escalation        AlertEscalation @relation(fields: [escalationId], references: [id], onDelete: Cascade)
+  responder         User            @relation("Responder", fields: [responderId], references: [id])
+  escalatedTo       User?           @relation("EscalatedToUserL3", fields: [escalatedToId], references: [id], onDelete: SetNull)
+
+  // UNIQUE constraint per escalation to prevent duplicate message IDs across escalations
+  @@unique([escalationId, telegramMessageId])
+  @@index([escalationId])
+  @@index([responderId])
+  @@map("alert_escalation_responses")
+}
+
+model AlertEscalationAudit {
+  id           String   @id @default(cuid())
+  escalationId String?  @map("escalation_id")
+  alertId      String   @map("alert_id")
+  event        String
+  details      Json?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([escalationId])
+  @@index([alertId])
+  @@map("alert_escalation_audits")
+}
+
+model EscalationAttachment {
+  id                String          @id @default(cuid())
+  escalationId      String          @map("escalation_id")
+  escalation        AlertEscalation @relation(fields: [escalationId], references: [id], onDelete: Cascade)
+  fileName          String          @map("file_name")
+  fileType          String          @map("file_type") // "text" | "image"
+  mimeType          String          @map("mime_type")
+  fileSize          Int             @map("file_size") // bytes
+  fileUrl           String          @map("file_url") // local storage path or URL
+  uploadedByUserId  String          @map("uploaded_by_user_id")
+  uploadedBy        User            @relation(fields: [uploadedByUserId], references: [id], onDelete: Cascade)
+  sentToTelegram    Boolean         @default(false) @map("sent_to_telegram")
+  telegramFileId    String?         @map("telegram_file_id")
+  telegramCaption   String?         @map("telegram_caption")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  @@index([escalationId])
+  @@index([uploadedByUserId])
+  @@map("escalation_attachments")
+}
+
+model AlertAnalysis {
+  id             String   @id
+  alertId        String   @map("alert_id")
+  integrationId  String   @map("integration_id")
+  content        String
+  author         String?
+  authorId       String?  @map("author_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  authorUser     User?    @relation("AuthorAnalysis", fields: [authorId], references: [id])
+
+  @@index([alertId])
+  @@index([integrationId])
+  @@map("alert_analysis")
+}
+
+model Notification {
+  id                  String   @id @default(cuid())
+  userId              String   @map("user_id")
+  notificationType    String   @map("notification_type") // "shift_recap", "alert", "escalation", etc
+  title               String
+  content             String
+  metadata            Json?    // Store shift info, alert counts, etc
+  isRead              Boolean  @default(false) @map("is_read")
+  telegramSent        Boolean  @default(false) @map("telegram_sent")
+  telegramMessageId   String?  @map("telegram_message_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+  readAt              DateTime? @map("read_at")
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+model ShiftNotificationConfig {
+  id                  String   @id @default("global") // Singleton pattern: always use "global" as ID
+  shiftStart1         String   @default("07:00") @map("shift_start_1") // HH:mm format
+  shiftEnd1           String   @default("15:00") @map("shift_end_1")
+  shiftStart2         String   @default("15:00") @map("shift_start_2")
+  shiftEnd2           String   @default("23:00") @map("shift_end_2")
+  shiftStart3         String   @default("23:00") @map("shift_start_3")
+  shiftEnd3           String   @default("07:00") @map("shift_end_3")
+  notificationMinutes Int      @default(15) @map("notification_minutes") // Minutes before shift ends
+  enableInApp         Boolean  @default(true) @map("enable_in_app")
+  enableTelegram      Boolean  @default(false) @map("enable_telegram")
+  telegramChatIdForNotifications String? @map("telegram_chat_id_for_notifications") // Custom chat ID for shift recaps (can be group, channel, or personal)
+  timezone            String   @default("UTC") // Timezone for shift calculation (applies to all users)
+  filterIntegrationIds String  @default("[]") @map("filter_integration_ids") // JSON array of integration IDs to include (empty = all)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("shift_notification_configs")
+}
+
+model Playbook {
+  id                  String           @id @default(cuid())
+  playbookId          String           @map("playbook_id")
+  ruleId              String           @map("rule_id")
+  useCaseName         String           @map("use_case_name")
+  status              String
+  severity            String
+  description         String
+  detectionType       String           @map("detection_type")
+  logSource           String           @map("log_source")
+  eventIdType         String           @map("event_id_type")
+  mitreTechniqueIds   String[]         @map("mitre_technique_ids")
+  mitreTechniqueNames String[]         @map("mitre_technique_names")
+  mitreTacticIds      String[]         @map("mitre_tactic_ids")
+  mitreTacticNames    String[]         @map("mitre_tactic_names")
+  detectionLogic      String           @map("detection_logic")
+  howToCheck          String           @map("how_to_check")
+  decision            String
+  recommendation      String
+  descriptionTemplate String?          @map("description_template")
+  evidenceToCollect   String?          @map("evidence_to_collect")
+  createdBy           String?          @map("created_by")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+  tenants             PlaybookTenant[]
+
+  @@map("playbooks")
+}
+
+model PlaybookTenant {
+  id         String   @id @default(cuid())
+  playbookId String   @map("playbook_id")
+  tenantName String   @map("tenant_name")
+  playbook   Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+
+  @@map("playbook_tenants")
+}
+

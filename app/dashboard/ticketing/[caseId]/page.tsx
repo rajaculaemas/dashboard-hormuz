@@ -325,7 +325,7 @@ export default function CaseDetailPage() {
               </div>
               <div className="flex gap-2">
                 <Badge variant={getStatusColor(caseDetail.status)}>
-                  {caseDetail.status === "in_progress" ? "In Progress" : caseDetail.status}
+                  {caseDetail.status}
                 </Badge>
                 <Badge variant={getSeverityColor(caseDetail.severity)}>
                   {caseDetail.severity}

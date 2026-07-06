@@ -39,7 +39,7 @@ const sidebarItems = [
   {
     title: "Alert Panel",
     href: "/dashboard/incidents",
-    icon: Bell,
+    icon: Activity,
     description: "Security alerts and incidents",
   },
   {
@@ -47,6 +47,12 @@ const sidebarItems = [
     href: "/dashboard/tickets",
     icon: Ticket,
     description: "Manage security incident cases",
+  },
+  {
+    title: "Notifications",
+    href: "/dashboard/notifications",
+    icon: Bell,
+    description: "System notifications and alerts recap",
   },
   {
     title: "Logs",
@@ -132,7 +138,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <SidebarContent />
       </div>
       <div className="flex flex-col">
-        <header className="flex h-14 items-center gap-4 border-b bg-muted/40 px-4 lg:h-[60px] lg:px-6">
+        <header className="flex h-14 items-center gap-4 border-b bg-muted/40 px-4 lg:h-[60px] lg:px-6 relative z-40">
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="outline" size="icon" className="shrink-0 md:hidden bg-transparent">
@@ -149,7 +155,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               {sidebarItems.find((item) => item.href === pathname)?.title || "Dashboard"}
             </h1>
           </div>
-          <DropdownMenu>
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="secondary" size="icon" className="rounded-full">
                 <Avatar className="h-8 w-8">
@@ -168,6 +175,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <DropdownMenuItem>Logout</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </header>
         <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">{children}</main>
       </div>

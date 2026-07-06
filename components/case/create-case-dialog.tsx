@@ -29,7 +29,18 @@ export function CreateCaseDialog({ open, onOpenChange, selectedAlerts, onSuccess
   const [loadingUsers, setLoadingUsers] = useState(false)
 
   // Get unique customer codes from selected alerts
-  const customerCodes = [...new Set(selectedAlerts.map((a: any) => a.metadata?.customer_code || a.customer_code))]
+  const getAlertCustomerCode = (alert: any) => {
+    return (
+      alert?.metadata?.socfortress?.customer_code ||
+      alert?.metadata?.customer_code ||
+      alert?.customer_code ||
+      alert?.custId ||
+      alert?.metadata?.cust_id ||
+      ""
+    )
+  }
+
+  const customerCodes = [...new Set(selectedAlerts.map((a: any) => getAlertCustomerCode(a)).filter(Boolean))]
   const customerCode = customerCodes.length === 1 ? customerCodes[0] : ""
 
   // Detect if alerts are from Stellar Cyber

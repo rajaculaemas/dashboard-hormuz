@@ -8,7 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { AlertCircle, X } from "lucide-react"
+import { AlertCircle, X, Clock, Upload, Lock, Unlock } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { EscalationFileUploader } from "./escalation-file-uploader"
+import { PendingEscalationFileUploader } from "./pending-escalation-file-uploader"
 
 interface StellarCyberAlertUpdateDialogProps {
   open: boolean
@@ -33,7 +36,6 @@ export function StellarCyberAlertUpdateDialog({
   const [assignee, setAssignee] = useState("")
   const [comments, setComments] = useState("")
   const [severityBasedOnAnalysis, setSeverityBasedOnAnalysis] = useState<string | null>(null)
-  const [analysisNotes, setAnalysisNotes] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
   const [tagsToAdd, setTagsToAdd] = useState<string[]>([])
   const [tagsToDelete, setTagsToDelete] = useState<string[]>([])
@@ -44,6 +46,21 @@ export function StellarCyberAlertUpdateDialog({
   const [recheckAttempts, setRecheckAttempts] = useState(0)
   const [stellarUsers, setStellarUsers] = useState<any[]>([])
   const [loadingUsers, setLoadingUsers] = useState(false)
+  const [l2Analysts, setL2Analysts] = useState<any[]>([])
+  const [loadingL2Analysts, setLoadingL2Analysts] = useState(false)
+  const [actionMode, setActionMode] = useState<"update" | "escalate">("update")
+  const [escalation, setEscalation] = useState<any>(null)
+  const [escalationError, setEscalationError] = useState("")
+  const [escalateToL2, setEscalateToL2] = useState("")
+  const [escalationAnalysis, setEscalationAnalysis] = useState("")
+  const [loadingEscalation, setLoadingEscalation] = useState(false)
+  const [justEscalated, setJustEscalated] = useState(false)
+  const [newEscalationId, setNewEscalationId] = useState("")
+  const [pendingEscalationFiles, setPendingEscalationFiles] = useState<any[]>([])
+  const [closeError, setCloseError] = useState("")
+  const [isClosing, setIsClosing] = useState(false)
+  const [isReopening, setIsReopening] = useState(false)
+  const [reopenError, setReopenError] = useState("")
   const MAX_RECHECK_ATTEMPTS = 30 // Max 30 checks = up to 30 seconds of rechecking
 
   // Check if user has JWT API key when dialog opens or when it becomes visible
@@ -73,13 +90,43 @@ export function StellarCyberAlertUpdateDialog({
     return () => clearInterval(interval)
   }, [open, userId, hasJwtKey, recheckAttempts])
 
+  // Load current status from database when dialog opens
+  const loadCurrentStatus = async () => {
+    if (!alert?.id) return
+    try {
+      console.log("[Stellar Dialog] Loading current status from database for alert:", alert.id)
+      const response = await fetch(`/api/alerts/${alert.id}`)
+      if (response.ok) {
+        const { data } = await response.json()
+        if (data) {
+          // Update status from current database state
+          setStatus(data?.status || "New")
+          setSeverity(data?.severity || "")
+          setAssignee(data?.metadata?.assignee || data?.assignee || "")
+          console.log("[Stellar Dialog] Current status loaded:", { status: data?.status, severity: data?.severity, assignee: data?.assignee })
+        }
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error loading current status:", error)
+    }
+  }
+
   // Fetch Stellar Cyber users when dialog opens and JWT key is ready
   useEffect(() => {
     if (open && hasJwtKey === true) {
-      console.log("[Stellar Dialog] JWT key available, fetching Stellar users...")
+      console.log("[Stellar Dialog] JWT key available, loading current status...")
+      // Load current status from database first
+      loadCurrentStatus()
+      // Then fetch Stellar users
       fetchStellarUsers()
+      // Always fetch L2 analysts when dialog opens
+      fetchL2Analysts()
+      // Fetch escalation details if alert has one
+      if (alert?.id) {
+        fetchEscalation()
+      }
     }
-  }, [open, hasJwtKey])
+  }, [open, hasJwtKey, alert?.id])
 
   const fetchStellarUsers = async () => {
     try {
@@ -174,9 +221,6 @@ export function StellarCyberAlertUpdateDialog({
       if (severityBasedOnAnalysis) {
         body.severityBasedOnAnalysis = severityBasedOnAnalysis
       }
-      if (analysisNotes?.trim()) {
-        body.analysisNotes = analysisNotes
-      }
 
       // Include tags to add/delete
       if (tagsToAdd.length > 0) {
@@ -200,22 +244,6 @@ export function StellarCyberAlertUpdateDialog({
       if (response.ok) {
         console.log("[Stellar Cyber Dialog] Alert status updated successfully")
 
-        // Save analysis if provided
-        if (analysisNotes?.trim()) {
-          try {
-            await fetch(`/api/alerts/${alert.id}/analyses`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                content: analysisNotes,
-                integrationId: alert.integrationId || alert.metadata?.integrationId,
-              }),
-            })
-          } catch (error) {
-            console.error("Failed to save analysis:", error)
-          }
-        }
-
         // Refresh alerts
         await onLoadAlerts?.()
 
@@ -225,7 +253,6 @@ export function StellarCyberAlertUpdateDialog({
         setAssignee("")
         setComments("")
         setSeverityBasedOnAnalysis(null)
-        setAnalysisNotes("")
         setTagsToAdd([])
         setTagsToDelete([])
         setNewTag("")
@@ -271,6 +298,158 @@ export function StellarCyberAlertUpdateDialog({
     setHasJwtKey(null)
     setRecheckAttempts(0) // Reset attempts when user manually verifies
     checkJwtApiKey()
+  }
+
+  const fetchL2Analysts = async () => {
+    try {
+      setLoadingL2Analysts(true)
+      console.log("[Stellar Dialog] Fetching L2 analysts...")
+      const response = await fetch(`/api/users?position=L2`)
+      const data = await response.json()
+      console.log("[Stellar Dialog] API Response:", data)
+      
+      if (data.success && Array.isArray(data.users)) {
+        console.log("[Stellar Dialog] L2 analysts loaded:", data.users.length, "analysts")
+        setL2Analysts(data.users)
+      } else if (Array.isArray(data)) {
+        console.log("[Stellar Dialog] L2 analysts loaded (array format):", data.length, "analysts")
+        setL2Analysts(data)
+      } else {
+        console.error("[Stellar Dialog] Unexpected response format:", data)
+        setL2Analysts([])
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error fetching L2 analysts:", error)
+      setL2Analysts([])
+    } finally {
+      setLoadingL2Analysts(false)
+    }
+  }
+
+  const fetchEscalation = async () => {
+    if (!alert?.id) return
+    try {
+      setLoadingEscalation(true)
+      const response = await fetch(`/api/alerts/${alert.id}/escalation`)
+      if (response.ok) {
+        const data = await response.json().catch(() => ({ escalation: null }))
+        setEscalation(data.escalation || null)
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error fetching escalation:", error)
+    } finally {
+      setLoadingEscalation(false)
+    }
+  }
+
+  const handleEscalate = async () => {
+    setEscalationError("")
+    if (!escalateToL2) {
+      setEscalationError("Please select an L2 analyst")
+      return
+    }
+
+    try {
+      setIsLoading(true)
+      const response = await fetch(`/api/alerts/${alert.id}/escalate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          escalationLevel: 2,
+          assignedToId: escalateToL2,
+          notes: escalationAnalysis || "",
+        }),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        console.log("[Stellar Dialog] Alert escalated successfully")
+        setJustEscalated(true)
+        const escalationId = data.escalationId || ""
+        setNewEscalationId(escalationId)
+        
+        // Upload pending files if any exist
+        if (pendingEscalationFiles.length > 0 && escalationId) {
+          console.log("[Stellar Dialog] Uploading pending files...", pendingEscalationFiles.length)
+          for (const file of pendingEscalationFiles) {
+            const formData = new FormData()
+            formData.append("file", file)
+            formData.append("escalationId", escalationId)
+            try {
+              await fetch(`/api/alerts/${alert.id}/escalation/upload-attachment`, {
+                method: "POST",
+                body: formData,
+              })
+            } catch (fileError) {
+              console.error("[Stellar Dialog] Error uploading file:", fileError)
+            }
+          }
+        }
+        
+        setEscalateToL2("")
+        setEscalationAnalysis("")
+        setPendingEscalationFiles([])
+        await fetchEscalation()
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Failed to escalate alert" }))
+        throw new Error(errorData.error || "Failed to escalate alert")
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error escalating alert:", error)
+      setEscalationError(error instanceof Error ? error.message : "Failed to escalate alert")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleReopenEscalation = async () => {
+    if (!escalation?.id) return
+    try {
+      setIsReopening(true)
+      setReopenError("")
+      const response = await fetch(`/api/alerts/${alert.id}/escalation/${escalation.id}/close-reopen`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reopen" }),
+      })
+
+      if (response.ok) {
+        await fetchEscalation()
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Failed to reopen escalation" }))
+        setReopenError(errorData.error || "Failed to reopen escalation")
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error reopening escalation:", error)
+      setReopenError("Failed to reopen escalation")
+    } finally {
+      setIsReopening(false)
+    }
+  }
+
+  const handleCloseEscalation = async () => {
+    if (!escalation?.id) return
+    try {
+      setIsClosing(true)
+      setCloseError("")
+      const response = await fetch(`/api/alerts/${alert.id}/escalation/${escalation.id}/close-reopen`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "close" }),
+      })
+
+      if (response.ok) {
+        await fetchEscalation()
+      } else {
+        const errorData = await response.json().catch(() => ({ error: "Failed to close escalation" }))
+        setCloseError(errorData.error || "Failed to close escalation")
+      }
+    } catch (error) {
+      console.error("[Stellar Dialog] Error closing escalation:", error)
+      setCloseError("Failed to close escalation")
+    } finally {
+      setIsClosing(false)
+    }
   }
 
   return (
@@ -330,13 +509,69 @@ export function StellarCyberAlertUpdateDialog({
         {/* Form - Only show if JWT key is available */}
         {hasJwtKey && !checkingJwt && (
           <>
-            {errorMessage && (
+            {/* Action Mode Toggle */}
+            <div className="flex gap-4 mb-4 p-3 bg-muted rounded-lg">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={actionMode === "update"}
+                  onChange={() => {
+                    setActionMode("update")
+                    setEscalationError("")
+                  }}
+                  className="w-4 h-4"
+                />
+                <span className="text-sm font-medium">Update Status (as L1)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={actionMode === "escalate"}
+                  onChange={async () => {
+                    setActionMode("escalate")
+                    setErrorMessage("")
+                    setEscalationError("")
+                    // Always fetch fresh L2 analysts when entering escalate mode
+                    console.log("[Stellar Dialog] User switched to escalate mode, fetching L2 analysts...")
+                    await fetchL2Analysts()
+                  }}
+                  disabled={escalation !== null && !loadingEscalation}
+                  className="w-4 h-4"
+                />
+                <span className={`text-sm font-medium ${escalation !== null && !loadingEscalation ? "text-gray-400" : ""}`}>
+                  Escalate to L2 {escalation !== null && !loadingEscalation ? "(Already escalated)" : "(requires analysis)"}
+                </span>
+              </label>
+            </div>
+
+            {/* Error Messages */}
+            {errorMessage && !actionMode.includes("escalate") && (
               <div className="flex items-start gap-3 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
                 <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-destructive">{errorMessage}</p>
               </div>
             )}
+            {escalationError && actionMode === "escalate" && (
+              <div className="flex items-start gap-3 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive">{escalationError}</p>
+              </div>
+            )}
 
+            {actionMode === "escalate" && escalation && !loadingEscalation && (
+              <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <AlertCircle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-blue-900">This alert is already escalated</p>
+                  <p className="text-xs text-blue-800 mt-1">
+                    View the escalation details below or check the Details tab to continue the escalation conversation with L2 analysts.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Update Mode Form */}
+            {actionMode === "update" && (
             <div className="space-y-4 py-4">
           {/* Status */}
           <div className="space-y-2">
@@ -392,7 +627,7 @@ export function StellarCyberAlertUpdateDialog({
               <SelectContent>
                 {stellarUsers.length > 0 ? (
                   stellarUsers.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
+                    <SelectItem key={user.id} value={user.name}>
                       {user.name}
                     </SelectItem>
                   ))
@@ -450,16 +685,7 @@ export function StellarCyberAlertUpdateDialog({
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="analysis-notes">Analysis & Findings</Label>
-                <Textarea
-                  id="analysis-notes"
-                  placeholder="Document your analysis, observations, or findings about this alert..."
-                  value={analysisNotes}
-                  onChange={(e) => setAnalysisNotes(e.target.value)}
-                  className="h-[120px]"
-                />
-              </div>
+
             </div>
           </div>
 
@@ -493,33 +719,60 @@ export function StellarCyberAlertUpdateDialog({
                 </div>
               </div>
 
-              {/* Tag Input */}
-              <div className="space-y-2">
-                <Label htmlFor="new-tag">
-                  {tagMode === "add" ? "Add new tag" : "Remove tag"}
-                </Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="new-tag"
-                    placeholder={tagMode === "add" ? "Enter tag name..." : "Enter tag to remove..."}
-                    value={newTag}
-                    onChange={(e) => setNewTag(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        handleAddTag()
-                      }
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddTag}
-                    disabled={!newTag?.trim()}
-                  >
-                    {tagMode === "add" ? "Add" : "Remove"}
-                  </Button>
+              {/* Tag Input - Predefined Tags + Manual Input */}
+              <div className="space-y-3">
+                {tagMode === "add" && (
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-2 block">Quick Add Predefined Tags:</Label>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {["True Positive", "False Positive", "Benign True Positive"].map((tag) => (
+                        <Button
+                          key={tag}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-xs h-8"
+                          onClick={() => {
+                            if (!tagsToAdd.includes(tag)) {
+                              setTagsToAdd([...tagsToAdd, tag])
+                            }
+                          }}
+                          disabled={tagsToAdd.includes(tag)}
+                        >
+                          + {tag}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                <div>
+                  <Label htmlFor="new-tag" className="text-sm">
+                    {tagMode === "add" ? "Or add custom tag" : "Remove tag"}
+                  </Label>
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      id="new-tag"
+                      placeholder={tagMode === "add" ? "Enter custom tag name..." : "Enter tag to remove..."}
+                      value={newTag}
+                      onChange={(e) => setNewTag(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          handleAddTag()
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAddTag}
+                      disabled={!newTag?.trim()}
+                    >
+                      {tagMode === "add" ? "Add" : "Remove"}
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -565,23 +818,224 @@ export function StellarCyberAlertUpdateDialog({
             </div>
           </div>
             </div>
+            )}
+
+            {/* Escalation Mode Form - Tabbed Interface */}
+            {actionMode === "escalate" && (
+            <>
+            {escalation && (
+              <Tabs defaultValue="attachments" className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="attachments">📎 Attachments</TabsTrigger>
+                  <TabsTrigger value="details">Details</TabsTrigger>
+                </TabsList>
+
+                {/* Escalation Status Header */}
+                <div className="mt-4 mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={escalation.closedAt ? "secondary" : "destructive"}
+                        className="gap-1"
+                      >
+                        {escalation.closedAt ? <Lock className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                        {escalation.status?.toUpperCase()}
+                      </Badge>
+                      {escalation.escalationLevel === 2 && (
+                        <Badge variant="outline" className="gap-1">
+                          🔺 L2 → L3 Escalated
+                        </Badge>
+                      )}
+                    </div>
+                    {escalation.closedAt && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleReopenEscalation}
+                        disabled={isClosing}
+                      >
+                        <Unlock className="h-3 w-3 mr-2" />
+                        Reopen
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {closeError && (
+                  <div className="flex items-start gap-3 p-3 bg-destructive/10 border border-destructive/20 rounded-lg mb-4">
+                    <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-destructive">{closeError}</p>
+                  </div>
+                )}
+
+                {/* Attachments Tab */}
+                <TabsContent value="attachments" className="mt-4">
+                  <EscalationFileUploader
+                    alertId={alert.id}
+                    escalationId={escalation.id}
+                    disabled={escalation.closedAt ? true : false}
+                    onUploadComplete={() => fetchEscalation()}
+                  />
+                </TabsContent>
+
+                {/* Details Tab */}
+                <TabsContent value="details" className="mt-4 space-y-4">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="font-medium text-gray-600">Escalated By</p>
+                      <p className="text-gray-900">{escalation.escalatedBy?.name}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-600">Escalated To</p>
+                      <p className="text-gray-900">{escalation.escalatedTo?.name}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-600">Escalation Time</p>
+                      <p className="text-gray-900 text-xs">{new Date(escalation.createdAt).toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-600">Status</p>
+                      <div className="mt-1">
+                        <Badge variant={escalation.closedAt ? "secondary" : "default"}>
+                          {escalation.status}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!escalation.closedAt && (
+                    <div className="border-t pt-4">
+                      <Label className="text-sm font-medium mb-2 block">Close Escalation</Label>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleCloseEscalation()}
+                        disabled={isClosing}
+                        className="w-full"
+                      >
+                        {isClosing ? "Closing..." : "Close Escalation"}
+                      </Button>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Closing will stop further escalation activity unless reopened later.
+                      </p>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            )}
+            {!escalation && !loadingEscalation && (
+              <div className="space-y-4 py-4">
+              {/* Timeout Information */}
+              <div className="flex items-start gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                <Clock className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-orange-900">30-Minute Response Timeout</p>
+                  <p className="text-xs text-orange-800 mt-1">
+                    L2 analyst will have 30 minutes to respond via Telegram. If no response is received, the alert will be auto-escalated to L3.
+                  </p>
+                </div>
+              </div>
+
+              {/* L2 Analyst Selection */}
+              <div className="space-y-2">
+                <Label htmlFor="escalate-to-l2">Escalate to L2 Analyst * {loadingL2Analysts && "(Loading...)"}</Label>
+                <Select value={escalateToL2} onValueChange={setEscalateToL2} disabled={loadingL2Analysts || l2Analysts.length === 0}>
+                  <SelectTrigger id="escalate-to-l2">
+                    <SelectValue placeholder={loadingL2Analysts ? "Loading L2 analysts..." : l2Analysts.length === 0 ? "No L2 analysts available" : "Select L2 analyst"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {l2Analysts.length > 0 ? (
+                      l2Analysts.map((analyst) => (
+                        <SelectItem key={analyst.id} value={analyst.id}>
+                          {analyst.name} {analyst.email ? `(${analyst.email})` : ""}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <div className="p-2 text-sm text-muted-foreground">
+                        {loadingL2Analysts ? "Loading analysts..." : "No L2 analysts found with Telegram chat ID"}
+                      </div>
+                    )}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">L2 analyst must have Telegram chat ID linked</p>
+                {!loadingL2Analysts && l2Analysts.length > 0 && (
+                  <p className="text-xs text-green-600">✓ {l2Analysts.length} L2 analysts available</p>
+                )}
+              </div>
+
+              {/* Escalation Analysis */}
+              <div className="space-y-2">
+                <Label htmlFor="escalation-analysis">Analysis (min 20 characters) *</Label>
+                <Textarea
+                  id="escalation-analysis"
+                  placeholder="Describe your analysis and why this alert needs L2 review..."
+                  value={escalationAnalysis}
+                  onChange={(e) => setEscalationAnalysis(e.target.value)}
+                  className="min-h-[100px]"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {escalationAnalysis.length} / 20 characters minimum
+                </p>
+              </div>
+
+              {/* File Attachment Section - Available from start */}
+              <div className="border-t pt-4">
+                <h3 className="text-sm font-semibold mb-3">📎 Attach Evidence Files</h3>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Add files now - they'll be sent to the L2 analyst when you escalate
+                </p>
+                
+                <PendingEscalationFileUploader
+                  pendingFiles={pendingEscalationFiles}
+                  onFilesChange={setPendingEscalationFiles}
+                />
+              </div>
+            </div>
+            )}
+            </>
+            )}
           </>
         )}
 
         {/* Footer - Always show but disable buttons if no JWT key */}
         <DialogFooter>
-          <Button 
-            variant="outline" 
-            onClick={() => onOpenChange(false)}
-          >
-            {hasJwtKey === false && !checkingJwt ? "Close" : "Cancel"}
-          </Button>
-          <Button 
-            onClick={handleUpdateStatus} 
-            disabled={isLoading || hasJwtKey === false || checkingJwt}
-          >
-            {isLoading ? "Updating..." : "Update Status"}
-          </Button>
+          {justEscalated ? (
+            <>
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  // Reset state
+                  setJustEscalated(false)
+                  setNewEscalationId("")
+                  setActionMode("update")
+                  setPendingEscalationFiles([])
+                  onOpenChange(false)
+                  onUpdateSuccess?.()
+                }}
+              >
+                Done
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button 
+                variant="outline" 
+                onClick={() => onOpenChange(false)}
+              >
+                {hasJwtKey === false && !checkingJwt ? "Close" : "Cancel"}
+              </Button>
+              <Button 
+                onClick={actionMode === "escalate" ? handleEscalate : handleUpdateStatus} 
+                disabled={isLoading || hasJwtKey === false || checkingJwt}
+              >
+                {isLoading ? (
+                  actionMode === "escalate" ? "Escalating..." : "Updating..."
+                ) : (
+                  actionMode === "escalate" ? "Escalate to L2" : "Update Status"
+                )}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

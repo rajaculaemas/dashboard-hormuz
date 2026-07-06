@@ -27,9 +27,11 @@ export async function GET(request: NextRequest, { params }: { params: { offenseI
     }
 
     const creds = integration.credentials as any
+    const domainId = creds.domain_id ? Number(creds.domain_id) : undefined
     const qradarClient = new QRadarClient({
       host: creds.host,
       api_key: creds.api_key,
+      domain_id: domainId,
     })
 
     // Fetch related events from QRadar

@@ -28,6 +28,7 @@ export const rolePermissions = {
   administrator: [
     'view_alerts',
     'update_alert_status',
+    'escalate_alert',
     'view_cases',
     'create_case',
     'update_case',
@@ -43,6 +44,7 @@ export const rolePermissions = {
   analyst: [
     'view_alerts',
     'update_alert_status',
+    'escalate_alert',
     'view_cases',
     'create_case',
     'update_case',

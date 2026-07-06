@@ -3,7 +3,7 @@
 import * as clipboard from "clipboard-polyfill"
 import { useEffect, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Bell, Filter, RefreshCw, AlertCircle, Download, Copy, Search } from "lucide-react"
+import { Bell, Filter, RefreshCw, AlertCircle, Download, Copy, Search, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +40,7 @@ import { AddToCaseDialog } from "@/components/alert/add-to-case-dialog"
 import { AlertDetailDialog } from "@/components/alert/alert-detail-dialog"
 import { WazuhAlertDetailDialog } from "@/components/alert/wazuh-alert-detail-dialog"
 import { WazuhAddToCaseDialog } from "@/components/alert/wazuh-add-to-case-dialog"
+import { QRadarAddToCaseDialog } from "@/components/alert/qradar-add-to-case-dialog"
 import { QRadarAlertDetailDialog } from "@/components/alert/qradar-alert-detail-dialog"
 import { SocfortressAlertDetailDialog } from "@/components/alert/socfortress-alert-detail-dialog"
 import { SocfortressAlertUpdateDialog } from "@/components/alert/socfortress-alert-update-dialog"
@@ -74,6 +75,21 @@ function isWazuhAlert(alert: any): boolean {
 function isQRadarAlert(alert: any): boolean {
   if (!alert) return false
   return alert.metadata?.qradar || alert.source === "qradar"
+}
+
+function getAlertIntegrationKey(alert: any): string {
+  return (
+    alert?.integrationId ||
+    alert?.integration?.id ||
+    alert?.integration?.source ||
+    alert?.source ||
+    ""
+  )
+}
+
+function hasUniformIntegration(alerts: any[]): boolean {
+  const integrationKeys = alerts.map((alert) => getAlertIntegrationKey(alert)).filter(Boolean)
+  return integrationKeys.length > 0 && new Set(integrationKeys).size === 1
 }
 
 export default function AlertPanel() {
@@ -114,19 +130,23 @@ export default function AlertPanel() {
   const [syncing, setSyncing] = useState(false)
   const [selectedAlert, setSelectedAlert] = useState<any>(null)
   const [selectedAlerts, setSelectedAlerts] = useState<string[]>([])
+  const [selectedAlertObjects, setSelectedAlertObjects] = useState<any[]>([])
   const [addToCaseDialogOpen, setAddToCaseDialogOpen] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<AlertStatus>("In Progress")
   const [comments, setComments] = useState("")
-  const [selectedIntegration, setSelectedIntegration] = useState<string | null>(null)
+  const [integrationFilter, setIntegrationFilter] = useState<string[]>(["all"])
+  const [integrationPopoverOpen, setIntegrationPopoverOpen] = useState(false)
   const [isClient, setIsClient] = useState(false)
   const [copiedAlertId, setCopiedAlertId] = useState(false)
   const [copiedRawData, setCopiedRawData] = useState(false)
   const [showRelatedEventsModal, setShowRelatedEventsModal] = useState(false)
   const [relatedEvents, setRelatedEvents] = useState<any[]>([])
   const [loadingEvents, setLoadingEvents] = useState(false)
+  const [eventsError, setEventsError] = useState<string | null>(null)
   const [closingReasons, setClosingReasons] = useState<Array<{ id: number; text: string }>>([])
   const [selectedClosingReason, setSelectedClosingReason] = useState<number | null>(null)
   const [showClosingReasonDialog, setShowClosingReasonDialog] = useState(false)
+  const [bulkClosingReason, setBulkClosingReason] = useState<number | null>(null)
   const [selectedAssignee, setSelectedAssignee] = useState<string | null>(null)
   const [selectedEvent, setSelectedEvent] = useState<any>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -143,6 +163,8 @@ export default function AlertPanel() {
   const [paginationData, setPaginationData] = useState<any>(null)
   const [wazuhAddToCaseOpen, setWazuhAddToCaseOpen] = useState(false)
   const [wazuhCaseAlertIds, setWazuhCaseAlertIds] = useState<string[]>([])
+  const [qradarAddToCaseOpen, setQRadarAddToCaseOpen] = useState(false)
+  const [qradarCaseAlertIds, setQRadarCaseAlertIds] = useState<string[]>([])
   const [createCaseDialogOpen, setCreateCaseDialogOpen] = useState(false)
   const [createCaseAlertIds, setCreateCaseAlertIds] = useState<string[]>([])
   const [selectedSeverity, setSelectedSeverity] = useState<string | null>(null)
@@ -150,12 +172,19 @@ export default function AlertPanel() {
   const [analysisNotes, setAnalysisNotes] = useState("")
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
   const [appUsers, setAppUsers] = useState<Array<{ id: string; name: string }>>([{ id: "admin-user-1", name: "Admin" }])
+  const [qradarUsers, setQradarUsers] = useState<Array<{ id: string; username: string }>>([])
+  const [loadingQRadarUsers, setLoadingQRadarUsers] = useState(false)
   const [showUpdateStatusDialog, setShowUpdateStatusDialog] = useState(false)
   const [showBulkUpdateDialog, setShowBulkUpdateDialog] = useState(false)
   const [bulkUpdateStatus, setBulkUpdateStatus] = useState<AlertStatus | string>("In Progress")
   const [bulkUpdateSeverity, setBulkUpdateSeverity] = useState<string | null>(null)
   const [bulkUpdateAssignee, setBulkUpdateAssignee] = useState<string | null>(null)
   const [bulkUpdateComments, setBulkUpdateComments] = useState("")
+  const [bulkSelectedTags, setBulkSelectedTags] = useState<string[]>([])
+  const [bulkStellarTagsToAdd, setBulkStellarTagsToAdd] = useState<string[]>([])
+  const [bulkStellarTagsToDelete, setBulkStellarTagsToDelete] = useState<string[]>([])
+  const [bulkStellarNewTag, setBulkStellarNewTag] = useState("")
+  const [bulkStellarTagMode, setBulkStellarTagMode] = useState<"add" | "delete">("add")
   const [bulkSeverityBasedOnAnalysis, setBulkSeverityBasedOnAnalysis] = useState<string | null>(null)
   const [bulkAnalysisNotes, setBulkAnalysisNotes] = useState("")
   const [pendingSearchQuery, setPendingSearchQuery] = useState("")
@@ -179,10 +208,49 @@ export default function AlertPanel() {
     else setSortDir('asc')
   }
 
+  // Integration filter handlers
+  const isAllIntegrations = integrationFilter.includes("all")
+  const selectedCount = integrationFilter.filter(f => f !== "all").length
+
+  const handleSelectAllIntegrations = (checked: boolean) => {
+    setIntegrationFilter(checked ? ["all"] : [])
+  }
+
+  const handleSelectIntegration = (integrationId: string, checked: boolean) => {
+    let newFilters = integrationFilter.filter(f => f !== "all")
+    if (checked) newFilters.push(integrationId)
+    else newFilters = newFilters.filter(f => f !== integrationId)
+    
+    if (newFilters.length === availableIntegrations.length) {
+      setIntegrationFilter(["all"])
+    } else {
+      setIntegrationFilter(newFilters)
+    }
+  }
+
+  const getIntegrationDisplayLabel = () => {
+    if (isAllIntegrations) return "All Integrations"
+    if (selectedCount === 0) return "No integration selected"
+    if (selectedCount === 1) {
+      const selected = availableIntegrations.find(i => integrationFilter.includes(i.id))
+      return selected?.name || "1 Integration"
+    }
+    return `${selectedCount} Integrations`
+  }
+
+  // Helper to get selected integration IDs
+  // Returns comma-separated string of integration IDs for API queries
+  const getSelectedIntegrationIds = () => {
+    if (isAllIntegrations) return null // null means "all"
+    if (selectedCount === 0) return null
+    // Return comma-separated IDs for multiple integrations
+    return integrationFilter.join(',')
+  }
+
   // Set default integration saat komponen mount
   useEffect(() => {
-    // Set "All Integrations" as default (null means show all)
-    setSelectedIntegration(null)
+    // Set "All Integrations" as default
+    setIntegrationFilter(["all"])
   }, [integrations])
 
   useEffect(() => {
@@ -241,10 +309,11 @@ export default function AlertPanel() {
   // Fetch closing reasons when a QRadar alert is selected
   useEffect(() => {
     const fetchClosingReasons = async () => {
-      if (!selectedAlert?.metadata?.qradar || !selectedIntegration) return
+      // Use the integration ID from the alert itself, not from global filter
+      if (!selectedAlert?.metadata?.qradar || !selectedAlert?.integrationId) return
 
       try {
-        const response = await fetch(`/api/qradar/closing-reasons?integrationId=${selectedIntegration}`)
+        const response = await fetch(`/api/qradar/closing-reasons?integrationId=${selectedAlert.integrationId}`)
         const data = await response.json()
         if (data.success) {
           setClosingReasons(data.reasons || [])
@@ -261,7 +330,116 @@ export default function AlertPanel() {
     } else {
       setSelectedAssignee(null)
     }
-  }, [selectedAlert?.metadata?.qradar, selectedIntegration])
+  }, [selectedAlert?.metadata?.qradar, selectedAlert?.integrationId])
+
+  // Fetch QRadar users when bulk update dialog opens for QRadar alerts
+  useEffect(() => {
+    if (!showBulkUpdateDialog || selectedAlerts.length === 0) {
+      setQradarUsers([])
+      return
+    }
+
+    const selectedAlertObjs = selectedAlerts
+      .map((id) => alerts.find((a) => a.id === id))
+      .filter(Boolean) as any[]
+
+    const allQRadar = selectedAlertObjs.every(
+      (a) =>
+        a &&
+        (a.integration?.source?.toLowerCase() === "qradar" ||
+          a.source?.toLowerCase() === "qradar")
+    )
+
+    if (!allQRadar) return
+
+    const firstAlert = selectedAlertObjs[0]
+    const integrationId =
+      firstAlert?.integrationId || firstAlert?.metadata?.integrationId
+
+    if (!integrationId) {
+      console.warn("[Bulk Update] No QRadar integration ID found")
+      return
+    }
+
+    const fetchQRadarUsersForBulk = async () => {
+      try {
+        setLoadingQRadarUsers(true)
+        console.log(
+          "[Bulk Update] Fetching QRadar users for integrationId:",
+          integrationId
+        )
+        const response = await fetch(
+          `/api/qradar/users?integrationId=${integrationId}`
+        )
+        if (response.ok) {
+          const data = await response.json()
+          console.log(
+            "[Bulk Update] Fetched QRadar users:",
+            data.users?.length || 0
+          )
+          setQradarUsers(data.users || [])
+        } else {
+          console.error(
+            "[Bulk Update] Failed to fetch QRadar users:",
+            response.status
+          )
+        }
+      } catch (error) {
+        console.error(
+          "[Bulk Update] Error fetching QRadar users:",
+          error
+        )
+      } finally {
+        setLoadingQRadarUsers(false)
+      }
+    }
+
+    fetchQRadarUsersForBulk()
+  }, [showBulkUpdateDialog, selectedAlerts.length])
+
+  // Fetch QRadar closing reasons when bulk update dialog opens for QRadar alerts with Closed status
+  useEffect(() => {
+    if (!showBulkUpdateDialog || selectedAlerts.length === 0 || bulkUpdateStatus !== "Closed") {
+      setClosingReasons([])
+      setBulkClosingReason(null)
+      return
+    }
+
+    const selectedAlertObjs = selectedAlerts
+      .map((id) => alerts.find((a) => a.id === id))
+      .filter(Boolean) as any[]
+
+    const allQRadar = selectedAlertObjs.every(
+      (a) =>
+        a &&
+        (a.integration?.source?.toLowerCase() === "qradar" ||
+          a.source?.toLowerCase() === "qradar")
+    )
+
+    if (!allQRadar) return
+
+    const firstAlert = selectedAlertObjs[0]
+    const integrationId =
+      firstAlert?.integrationId || firstAlert?.metadata?.integrationId
+
+    if (!integrationId) return
+
+    const fetchClosingReasons = async () => {
+      try {
+        const response = await fetch(
+          `/api/qradar/closing-reasons?integrationId=${integrationId}`
+        )
+        const data = await response.json()
+        if (data.success) {
+          setClosingReasons(data.reasons || [])
+        }
+      } catch (error) {
+        console.error("[Bulk Update] Error fetching closing reasons:", error)
+      }
+    }
+
+    fetchClosingReasons()
+  }, [showBulkUpdateDialog, selectedAlerts.length, bulkUpdateStatus, alerts])
 
   // Convert local date to YYYY-MM-DD format string for API
   // This preserves the user's local date regardless of timezone
@@ -279,8 +457,9 @@ export default function AlertPanel() {
       // Build query parameters with proper timezone handling
       const params = new URLSearchParams()
 
-      if (selectedIntegration) {
-        params.append("integrationId", selectedIntegration)
+      const selectedIntegrationIds = getSelectedIntegrationIds()
+      if (selectedIntegrationIds) {
+        params.append("integrationIds", selectedIntegrationIds)
       }
 
       // Add pagination parameters
@@ -386,8 +565,9 @@ export default function AlertPanel() {
     try {
       const params = new URLSearchParams()
 
-      if (selectedIntegration) {
-        params.append("integrationId", selectedIntegration)
+      const selectedIntegrationIds = getSelectedIntegrationIds()
+      if (selectedIntegrationIds) {
+        params.append("integrationIds", selectedIntegrationIds)
       }
 
       // Set high limit to get all matching alerts
@@ -429,8 +609,11 @@ export default function AlertPanel() {
       console.log("All filtered alerts response:", data)
 
       if (data.success) {
-        setAllFilteredAlerts(data.data || [])
+        const alertsData = data.data || []
+        console.log(`[Alert Panel] Loaded ${alertsData.length} filtered alerts`)
+        setAllFilteredAlerts(alertsData)
       } else {
+        console.log("[Alert Panel] Failed to fetch alerts:", data.error)
         setAllFilteredAlerts([])
       }
     } catch (error) {
@@ -440,11 +623,16 @@ export default function AlertPanel() {
   }
 
   const handleSyncAlerts = async () => {
-    if (!selectedIntegration) return
+    const selectedIntegrationIds = getSelectedIntegrationIds()
+    if (!selectedIntegrationIds) return
 
     try {
       setSyncing(true)
-      await syncAlerts(selectedIntegration)
+      // For sync, sync each selected integration individually
+      const integrationIds = selectedIntegrationIds.split(',')
+      for (const integrationId of integrationIds) {
+        await syncAlerts(integrationId)
+      }
       // After sync completes, refresh the alerts
       await loadAlerts()
       await loadAllFilteredAlerts()
@@ -657,6 +845,27 @@ export default function AlertPanel() {
         return meta.rule?.mitre?.id?.[0] || meta.mitreId || null
       case "tags":
         return (meta.tags || alert.tags || []).join(", ") || null
+      case "assignee": {
+        const integration = alert.integrationName || alert.integration?.name || ""
+        
+        // Extract assignee based on integration type for filtering
+        if (integration === "QRadar" || integration.includes("QRadar")) {
+          return meta.qradar?.assigned_to || meta.assigned_to || null
+        } else if (integration === "Stellar Cyber" || integration.includes("Stellar")) {
+          return meta.assignee || null
+        } else if (integration === "SOCFortress" || integration === "Copilot" || integration.includes("SOCFortress")) {
+          // Try nested paths for SOCFortress
+          return meta.socfortress?.assigned_to || 
+                 meta.incident_event?.assigned_to ||
+                 meta.assigned_to || 
+                 null
+        } else if (integration === "Wazuh" || integration.includes("Wazuh")) {
+          return meta.assignee || null
+        } else {
+          // Fallback
+          return meta.assignee || meta.assigned_to || meta.qradar?.assigned_to || meta.socfortress?.assigned_to || null
+        }
+      }
       default:
         return null
     }
@@ -722,11 +931,11 @@ export default function AlertPanel() {
 
   // Load alerts when selected integration changes (skip if no alerts loaded yet)
   useEffect(() => {
-    if (selectedIntegration && alerts.length > 0) {
+    if ((isAllIntegrations || selectedCount > 0) && alerts.length > 0) {
       loadAlerts()
       loadAllFilteredAlerts()
     }
-  }, [selectedIntegration])
+  }, [integrationFilter])
 
   // Load alerts when absolute date range changes (only if already loaded)
   useEffect(() => {
@@ -738,7 +947,23 @@ export default function AlertPanel() {
 
   // Helper function to determine which status options to show
   const getStatusOptionsForSource = () => {
-    const integration = integrations.find((i) => i.id === selectedIntegration)
+    const selectedIntegrationIds = getSelectedIntegrationIds()
+    
+    // If multiple integrations selected, return default (Stellar Cyber) options
+    if (!selectedIntegrationIds) {
+      // "all" mean show default
+      return [
+        { value: "all", label: "All Status" },
+        { value: "New", label: "New" },
+        { value: "In Progress", label: "In Progress" },
+        { value: "Ignored", label: "Ignored" },
+        { value: "Closed", label: "Closed" },
+      ]
+    }
+    
+    // Get first selected integration for status options
+    const firstIntegrationId = selectedIntegrationIds.split(',')[0]
+    const integration = integrations.find((i) => i.id === firstIntegrationId)
 
     if (integration) {
       const name = (integration.name || "").toLowerCase()
@@ -852,17 +1077,56 @@ export default function AlertPanel() {
     }
   }
 
-  const fetchRelatedEvents = async (offenseId: number) => {
+  const fetchRelatedEvents = async (offenseId: number, forceRefresh: boolean = false) => {
     try {
       setLoadingEvents(true)
-      const response = await fetch(`/api/qradar/events?offenseId=${offenseId}&integrationId=${selectedIntegration}`)
+      setEventsError(null)
+      
+      // Use the integration ID from selectedAlert, not from global filter
+      if (!selectedAlert?.integrationId) {
+        const errorMsg = "No integration ID available for fetching events"
+        console.error(errorMsg)
+        setEventsError(errorMsg)
+        return
+      }
+
+      const query = new URLSearchParams({
+        offenseId: String(offenseId),
+        integrationId: selectedAlert.integrationId,
+        hoursBack: "12",
+      })
+
+      // Use different endpoints based on action:
+      // - forceRefresh=false (initial view): use /api/qradar/events (checks DB first, returns from DB if available)
+      // - forceRefresh=true (reload button): use /api/qradar/events/manual-refresh (always fetch from QRadar)
+      const endpoint = forceRefresh 
+        ? `/api/qradar/events/manual-refresh?${query.toString()}`
+        : `/api/qradar/events?${query.toString()}`
+      
+      const response = await fetch(endpoint)
       const data = await response.json()
+      
       if (data.success) {
         setRelatedEvents(data.events || [])
+        setShowRelatedEventsModal(true)
+        console.log(`✓ Successfully fetched ${data.events?.length || 0} related events${forceRefresh ? ' (force refresh)' : ''}`)
+      } else {
+        // Handle specific timeout error
+        if (data.isTimeout) {
+          const timeoutMsg = 
+            "Request timeout: QRadar did not respond within 5 minutes. Please try again later or contact your QRadar administrator."
+          setEventsError(timeoutMsg)
+          console.warn(`[Timeout] ${timeoutMsg}`)
+        } else {
+          const errorMsg = data.error || "Failed to fetch related events"
+          setEventsError(errorMsg)
+          console.error(`Error: ${errorMsg}`)
+        }
       }
-      setShowRelatedEventsModal(true)
     } catch (error) {
-      console.error("Failed to fetch related events:", error)
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error("Failed to fetch related events:", errorMsg)
+      setEventsError(`Failed to fetch related events: ${errorMsg}`)
     } finally {
       setLoadingEvents(false)
     }
@@ -871,8 +1135,14 @@ export default function AlertPanel() {
   const handleUpdateStatus = async () => {
     if (!selectedAlert) return
 
+    const effectiveAssignee =
+      selectedAssignee ||
+      selectedAlert.metadata?.qradar?.assigned_to ||
+      selectedAlert.metadata?.assignee ||
+      null
+
     // For QRadar alerts, assignee is required
-    if (selectedAlert.metadata?.qradar && !selectedAssignee) {
+    if (selectedAlert.metadata?.qradar && !effectiveAssignee) {
       alert("Please assign the alert to a user before updating status")
       return
     }
@@ -908,8 +1178,8 @@ export default function AlertPanel() {
       // For QRadar, include closing reason and create ticket if FOLLOW_UP
       if (selectedAlert.metadata?.qradar) {
         body.isQRadar = true
-        if (selectedAssignee) {
-          body.assignedTo = selectedAssignee
+        if (effectiveAssignee) {
+          body.assignedTo = effectiveAssignee
         }
         if (updateStatus === "Closed" && selectedClosingReason) {
           body.closingReasonId = selectedClosingReason
@@ -1034,41 +1304,50 @@ export default function AlertPanel() {
           </Button>
 
           <div className="flex items-center gap-2">
-            <Select
-              value={selectedIntegration === null ? "all" : (selectedIntegration || "")}
-              onValueChange={(id) => {
-                useAlertStore.getState().setSelectedIntegration(id === "all" ? null : id)
-                setSelectedIntegration(id === "all" ? null : id)
-              }}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue
-                  placeholder={
-                    selectedIntegration === null
-                      ? "All Integrations"
-                      : selectedIntegration
-                      ? availableIntegrations.find((i) => i.id === selectedIntegration)?.name
-                      : "Select integration"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  All Integrations
-                </SelectItem>
-                {availableIntegrations.map((integration) => (
-                  <SelectItem key={integration.id} value={integration.id}>
-                    {integration.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={integrationPopoverOpen} onOpenChange={setIntegrationPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="justify-between">
+                  <span>{getIntegrationDisplayLabel()}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-3" align="start">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 py-1">
+                    <Checkbox
+                      id="integration-all"
+                      checked={isAllIntegrations}
+                      onCheckedChange={handleSelectAllIntegrations}
+                    />
+                    <label htmlFor="integration-all" className="text-sm font-medium cursor-pointer flex-1">
+                      All Integrations
+                    </label>
+                  </div>
+                  <div className="border-t pt-2">
+                    {availableIntegrations.map((integration) => (
+                      <div key={integration.id} className="flex items-center gap-2 py-1">
+                        <Checkbox
+                          id={`integration-${integration.id}`}
+                          checked={integrationFilter.includes(integration.id)}
+                          onCheckedChange={(checked) =>
+                            handleSelectIntegration(integration.id, !!checked)
+                          }
+                        />
+                        <label htmlFor={`integration-${integration.id}`} className="text-sm cursor-pointer flex-1">
+                          {integration.name}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
 
             <Button 
               variant="outline" 
               size="sm"
               onClick={() => {
-                if (selectedIntegration === null) {
+                if (isAllIntegrations) {
                   handleSyncAllIntegrations()
                 } else {
                   handleSyncAlerts()
@@ -1383,7 +1662,10 @@ export default function AlertPanel() {
                   setExporting(true)
                   try {
                     const params = new URLSearchParams()
-                    if (selectedIntegration) params.append('integrationId', selectedIntegration)
+                    const selectedIntegrationIds = getSelectedIntegrationIds()
+                    if (selectedIntegrationIds) {
+                      params.append('integrationIds', selectedIntegrationIds)
+                    }
 
                     // time range
                     if (useAbsoluteDate && dateRange) {
@@ -1443,48 +1725,132 @@ export default function AlertPanel() {
                   </>
                 )}
               </Button>
-              {selectedAlerts.length > 0 && canUpdateAlert && (
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => {
-                    // Check if all selected alerts are from the same integration
-                    const selectedAlertObjs = selectedAlerts
-                      .map((id) => alerts.find((a) => a.id === id))
-                      .filter(Boolean) as any[]
-                    
-                    const integrations = new Set(selectedAlertObjs.map((a) => a.integrationId))
-                    
-                    if (integrations.size !== 1) {
-                      alert("Please select alerts from the same integration")
-                      return
-                    }
-                    
-                    // Check if alerts are from Wazuh by looking at metadata or integration source
-                    const firstAlert = selectedAlertObjs[0]
-                    const isWazuh = firstAlert?.metadata?.agentId ||
-                                   firstAlert?.integration?.source?.toLowerCase() === "wazuh" ||
-                                   firstAlert?.source?.toLowerCase() === "wazuh"
-                    
-                    if (isWazuh) {
-                      // For Wazuh, use Wazuh dialog
-                      setWazuhCaseAlertIds(selectedAlerts)
-                      setWazuhAddToCaseOpen(true)
-                    } else {
-                      // For other integrations, use standard dialog
-                      setAddToCaseDialogOpen(true)
-                    }
-                  }}
-                >
-                  Add {selectedAlerts.length} Alert{selectedAlerts.length > 1 ? "s" : ""} to Case
-                </Button>
-              )}
               {selectedAlerts.length > 0 && canUpdateAlert && (() => {
-                // Show bulk update when all selected alerts are from Wazuh
-                // (previously required same title; relax to allow bulk ops across different titles)
+                // First check if all alerts are from Socfortress (they have dedicated "Create Case" button)
+                const selectedAlertObjs = selectedAlerts
+                  .map((id) => alerts.find((a) => a.id === id))
+                  .filter(Boolean) as any[]
+                const allSocfortress = selectedAlertObjs.every(a => 
+                  a && (a.source === 'socfortress' || a.source === 'copilot' || a.integration?.source?.toLowerCase() === 'socfortress' || a.integration?.source?.toLowerCase() === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot)
+                )
+
+                const uniformIntegration = hasUniformIntegration(selectedAlertObjs)
+                
+                // Don't show generic "Add to Case" for Socfortress alerts
+                if (allSocfortress || !uniformIntegration) return null
+                
+                return (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      // Use the previously stored alert objects instead of looking them up
+                      const selectedAlertObjs = selectedAlertObjects.length > 0 ? selectedAlertObjects : selectedAlerts
+                        .map((id) => alerts.find((a) => a.id === id))
+                        .filter(Boolean) as any[]
+                      
+                      console.log("[Add to Case] Using alerts from component scope:", {
+                        selectedAlertIds: selectedAlerts,
+                        alertsInComponent: alerts.length,
+                        foundAlerts: selectedAlertObjs.length,
+                        sampleAlertIds: alerts.slice(0, 3).map(a => a.id),
+                      })
+                      
+                      // Debug: Show what we're actually selecting
+                      console.log("[Add to Case] Selected alert IDs:", selectedAlerts)
+                      console.log("[Add to Case] Available alert IDs in store:", alerts.slice(0, 10).map(a => a.id))
+                      
+                      // Check if any selected ID is in the store
+                      const selectedIdInStore = selectedAlerts.some(id => alerts.some(a => a.id === id))
+                      console.log("[Add to Case] Any selected ID in store?:", selectedIdInStore)
+                      console.log("[Add to Case] First selected alert ID:", selectedAlerts[0])
+                      console.log("[Add to Case] Alert in store with that ID:", alerts.find(a => a.id === selectedAlerts[0]))
+                      console.log("[Add to Case] Using stored objects count:", selectedAlertObjects.length)
+                      
+                      // Early exit if no matched alerts
+                      if (selectedAlertObjs.length === 0) {
+                        console.warn("[Add to Case] selectedAlertObjs is empty after matching")
+                        alert("No matching alerts found. Please refresh and try again.")
+                        return
+                      }
+
+                      if (selectedAlertObjs.length > 1 && !hasUniformIntegration(selectedAlertObjs)) {
+                        alert("Please select alerts from the same integration")
+                        return
+                      }
+                      
+                      // Check if all alerts are from Socfortress - skip validation for them since they have separate dialog
+                      const isSocfortress = selectedAlertObjs.some(a => 
+                        a && (a.source === 'socfortress' || a.source === 'copilot' || a.integration?.source?.toLowerCase() === 'socfortress' || a.integration?.source?.toLowerCase() === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot)
+                      )
+                      
+                      if (!isSocfortress) {
+                        // Validation for non-Socfortress alerts
+                        selectedAlertObjs.forEach((alert, idx) => {
+                          console.log(`  Alert ${idx}:`, {
+                            id: alert.id,
+                            integrationId: alert.integrationId,
+                            integrationName: alert.integration?.name,
+                            integrationSource: alert.integration?.source,
+                          })
+                        })
+                        // Priority: integrationId > integration.id > integration.source
+                        const integrationIds = selectedAlertObjs.map((a) => a.integrationId || a.integration?.id).filter(Boolean)
+                        const integrationSources = selectedAlertObjs.map((a) => a.integration?.source?.toLowerCase()).filter(Boolean)
+                        
+                        // Check by IDs if available, otherwise by source
+                        if (integrationIds.length === selectedAlertObjs.length) {
+                          const uniqueIds = new Set(integrationIds)
+                          if (uniqueIds.size !== 1) {
+                            console.warn("Integration mismatch:", { ids: Array.from(uniqueIds) })
+                            alert("Please select alerts from the same integration")
+                            return
+                          }
+                        } else if (integrationSources.length > 0) {
+                          const uniqueSources = new Set(integrationSources)
+                          if (uniqueSources.size !== 1) {
+                            console.warn("Integration source mismatch:", { sources: Array.from(uniqueSources) })
+                            alert("Please select alerts from the same integration")
+                            return
+                          }
+                        }
+                      }
+                      
+                      // Check if alerts are from Wazuh or QRadar by looking at metadata or integration source
+                      const firstAlert = selectedAlertObjs[0]
+                      const isWazuh = firstAlert?.metadata?.agentId ||
+                                     firstAlert?.integration?.source?.toLowerCase() === "wazuh" ||
+                                     firstAlert?.source?.toLowerCase() === "wazuh"
+                      const isQRadar = firstAlert?.integration?.source?.toLowerCase() === "qradar" ||
+                                     firstAlert?.source?.toLowerCase() === "qradar" ||
+                                     firstAlert?.metadata?.qradar
+                      
+                      if (isQRadar) {
+                        // For QRadar, use QRadar dialog
+                        setQRadarCaseAlertIds(selectedAlerts)
+                        setQRadarAddToCaseOpen(true)
+                      } else if (isWazuh) {
+                        // For Wazuh, use Wazuh dialog
+                        setWazuhCaseAlertIds(selectedAlerts)
+                        setWazuhAddToCaseOpen(true)
+                      } else {
+                        // For other integrations (Stellar Cyber), use standard dialog
+                        setAddToCaseDialogOpen(true)
+                      }
+                    }}
+                  >
+                    Add {selectedAlerts.length} Alert{selectedAlerts.length > 1 ? "s" : ""} to Case
+                  </Button>
+                )
+              })()}
+              {selectedAlerts.length > 0 && canUpdateAlert && (() => {
+                // Show bulk update for Wazuh, QRadar, SOCFortress, and Stellar Cyber alerts
                 const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
                 const allWazuh = selectedAlertObjs.every(a => a && (a.metadata?.agentId || a.integration?.source?.toLowerCase() === 'wazuh' || a.source?.toLowerCase() === 'wazuh'))
-                if (allWazuh) {
+                const allQRadar = selectedAlertObjs.every(a => a && (a.integration?.source?.toLowerCase() === 'qradar' || a.source?.toLowerCase() === 'qradar'))
+                const allSocfortress = selectedAlertObjs.every(a => a && (a.source === 'socfortress' || a.source === 'copilot' || a.integration?.source?.toLowerCase() === 'socfortress' || a.integration?.source?.toLowerCase() === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot))
+                const allStellarCyber = selectedAlertObjs.every(a => a && (a.integration?.source?.toLowerCase() === 'stellar-cyber' || a.source?.toLowerCase() === 'stellar-cyber' || a.metadata?.stellarCyber))
+                if (allWazuh || allQRadar || allSocfortress || allStellarCyber) {
                   return (
                     <Button variant="secondary" size="sm" onClick={() => setShowBulkUpdateDialog(true)}>
                       Bulk Update ({selectedAlerts.length})
@@ -1494,15 +1860,35 @@ export default function AlertPanel() {
                 return null
               })()}
               {selectedAlerts.length > 0 && canUpdateAlert && (() => {
-                // Show create case button for SOCFortress alerts
+                // Show create case button for SOCFortress alerts (alongside bulk update)
                 const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
                 const allSocfortress = selectedAlertObjs.every(a => 
-                  a && (a.source === 'socfortress' || a.source === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot)
+                  a && (a.source === 'socfortress' || a.source === 'copilot' || a.integration?.source?.toLowerCase() === 'socfortress' || a.integration?.source?.toLowerCase() === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot)
                 )
                 if (allSocfortress) {
                   return (
                     <Button variant="outline" size="sm" onClick={() => {
-                      setCreateCaseAlertIds(selectedAlerts)
+                      const selectedForCreate = selectedAlertObjects.length > 0
+                        ? selectedAlertObjects
+                        : selectedAlerts
+                            .map((id) => alerts.find((a) => a.id === id))
+                            .filter(Boolean) as any[]
+
+                      if (selectedForCreate.length === 0) {
+                        alert("No matching alerts found. Please refresh and try again.")
+                        return
+                      }
+
+                      const integrationKeys = selectedForCreate
+                        .map((alert) => getAlertIntegrationKey(alert))
+                        .filter(Boolean)
+
+                      if (new Set(integrationKeys).size > 1) {
+                        alert("Please select alerts from the same integration")
+                        return
+                      }
+
+                      setCreateCaseAlertIds(selectedForCreate.map((alert) => alert.id))
                       setCreateCaseDialogOpen(true)
                     }}>
                       Create Case
@@ -1630,12 +2016,23 @@ export default function AlertPanel() {
                 onSelectAlert={(checked, alertId) => {
                   if (checked) {
                     setSelectedAlerts((prev) => (prev.includes(alertId) ? prev : [...prev, alertId]))
+                    // Also store the full alert object
+                    const alertObj = paginatedAlerts.find(a => a.id === alertId)
+                    if (alertObj) {
+                      setSelectedAlertObjects((prev) => {
+                        const exists = prev.some(a => a.id === alertId)
+                        return exists ? prev : [...prev, alertObj]
+                      })
+                    }
                   } else {
                     setSelectedAlerts((prev) => prev.filter((id) => id !== alertId))
+                    // Also remove from objects
+                    setSelectedAlertObjects((prev) => prev.filter(a => a.id !== alertId))
                   }
                 }}
                 onViewDetails={(alert) => {
                   setSelectedAlert(alert)
+                  setEventsError(null) // Clear any previous error messages
                   setShowAlertDetailModal(true)
                 }}
                 onUpdateStatus={(alert) => {
@@ -1691,11 +2088,16 @@ export default function AlertPanel() {
             await loadAlerts(currentPage, pageSize)
             await loadAllFilteredAlerts()
           }}
-          onShowClosingReasonDialog={() => {
+          onShowClosingReasonDialog={(status, assignee, comments) => {
+            setUpdateStatus(status as AlertStatus)
+            if (assignee) {
+              setSelectedAssignee(assignee)
+            }
+            if (typeof comments === "string") {
+              setComments(comments)
+            }
             setShowClosingReasonDialog(true)
           }}
-          selectedClosingReason={selectedClosingReason}
-          showClosingReasonDialog={showClosingReasonDialog}
         />
       ) : selectedAlert?.metadata?.wazuh || selectedAlert?.source === "wazuh" ? (
         // Wazuh-specific update dialog
@@ -1733,117 +2135,384 @@ export default function AlertPanel() {
         />
       )}
 
-      {/* Bulk Update Dialog for Wazuh alerts */}
-      <Dialog open={showBulkUpdateDialog} onOpenChange={setShowBulkUpdateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Bulk Update Selected Alerts</DialogTitle>
-            <DialogDescription>
-              Apply status, severity, assignee and notes to all selected Wazuh alerts with the same title.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="status">Status</Label>
-              <Select value={bulkUpdateStatus} onValueChange={(v) => setBulkUpdateStatus(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="New">New</SelectItem>
-                  <SelectItem value="In Progress">In Progress</SelectItem>
-                  <SelectItem value="Ignored">Ignored</SelectItem>
-                  <SelectItem value="Closed">Closed</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+      {/* Bulk Update Dialog - with integration-specific fields */}
+      {(() => {
+        const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
+        
+        // Detect integration type
+        const allQRadar = selectedAlertObjs.every(a => a && (a.integration?.source?.toLowerCase() === 'qradar' || a.source?.toLowerCase() === 'qradar'))
+        const allStellarCyber = selectedAlertObjs.every(a => a && (a.integration?.source?.toLowerCase() === 'stellar-cyber' || a.source?.toLowerCase() === 'stellar-cyber' || a.metadata?.stellarCyber))
+        const allSocfortress = selectedAlertObjs.every(a => a && (a.source === 'socfortress' || a.source === 'copilot' || a.integration?.source?.toLowerCase() === 'socfortress' || a.integration?.source?.toLowerCase() === 'copilot' || a.metadata?.socfortress || a.metadata?.copilot))
+        const allWazuh = selectedAlertObjs.every(a => a && (a.metadata?.agentId || a.integration?.source?.toLowerCase() === 'wazuh' || a.source?.toLowerCase() === 'wazuh'))
+        
+        // Use appropriate user list
+        const usersForAssignee = allQRadar 
+          ? qradarUsers.map((u) => ({ id: u.id, name: u.username }))
+          : allSocfortress 
+          ? SOCFORTRESS_USERS.map((u) => ({ id: u.username, name: u.username }))
+          : appUsers
+        
+        // Status options per integration
+        const getStatusOptions = () => {
+          if (allQRadar) return [
+            { value: "New", label: "Open" },
+            { value: "In Progress", label: "Follow Up" },
+            { value: "Closed", label: "Closed" }
+          ]
+          if (allSocfortress) return [
+            { value: "New", label: "New" },
+            { value: "In Progress", label: "In Progress" },
+            { value: "Closed", label: "Closed" }
+          ]
+          // Default for Wazuh and Stellar
+          return [
+            { value: "New", label: "New" },
+            { value: "In Progress", label: "In Progress" },
+            { value: "Ignored", label: "Ignored" },
+            { value: "Closed", label: "Closed" }
+          ]
+        }
+        
+        const statusOptions = getStatusOptions()
+        const dialogDescription = allQRadar ? "Apply status, assignee and notes to all selected QRadar alerts." 
+          : allStellarCyber ? "Apply status, severity, assignee, notes and tags to all selected Stellar Cyber alerts."
+          : allSocfortress ? "Apply status, severity, assignee and notes to all selected SOCFortress alerts."
+          : "Apply status, severity, assignee and notes to all selected Wazuh alerts."
+        
+        return (
+          <Dialog open={showBulkUpdateDialog} onOpenChange={setShowBulkUpdateDialog}>
+            <DialogContent className="max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Bulk Update Selected Alerts</DialogTitle>
+                <DialogDescription>{dialogDescription}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                {/* Status - Common to all */}
+                <div className="space-y-2">
+                  <Label htmlFor="status">Status</Label>
+                  <Select value={bulkUpdateStatus} onValueChange={(v) => setBulkUpdateStatus(v)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="severity">Severity</Label>
-              <Select value={bulkUpdateSeverity || ""} onValueChange={(v) => setBulkUpdateSeverity(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Low">Low</SelectItem>
-                  <SelectItem value="Medium">Medium</SelectItem>
-                  <SelectItem value="High">High</SelectItem>
-                  <SelectItem value="Critical">Critical</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+                {/* Closing Reason - ONLY for QRadar when status is Closed */}
+                {allQRadar && bulkUpdateStatus === "Closed" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="closing-reason">
+                      Closing Reason <span className="text-red-500">*</span>
+                    </Label>
+                    <Select value={bulkClosingReason?.toString() || ""} onValueChange={(v) => setBulkClosingReason(parseInt(v))}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select closing reason (required)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {closingReasons.length > 0 ? (
+                          closingReasons.map((reason) => (
+                            <SelectItem key={reason.id} value={reason.id.toString()}>
+                              {reason.text}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <div className="p-2 text-sm text-muted-foreground">
+                            No closing reasons available
+                          </div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-            <div className="space-y-2">
-              <Label htmlFor="assign">Assign To</Label>
-              <Select value={bulkUpdateAssignee || ""} onValueChange={(v) => setBulkUpdateAssignee(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {appUsers.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+                {/* Severity - NOT for QRadar (only in Analysis section) */}
+                {!allQRadar && (
+                  <div className="space-y-2">
+                    <Label htmlFor="severity">Severity</Label>
+                    <Select value={bulkUpdateSeverity || ""} onValueChange={(v) => setBulkUpdateSeverity(v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Low">Low</SelectItem>
+                        <SelectItem value="Medium">Medium</SelectItem>
+                        <SelectItem value="High">High</SelectItem>
+                        <SelectItem value="Critical">Critical</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-            <div className="space-y-2">
-              <Label htmlFor="comments">Comments</Label>
-              <Textarea value={bulkUpdateComments} onChange={(e) => setBulkUpdateComments(e.target.value)} />
-            </div>
+                {/* Assign To - Common to all */}
+                <div className="space-y-2">
+                  <Label htmlFor="assign">{allQRadar ? "Assignee" : "Assign To"} {allQRadar && loadingQRadarUsers && "(Loading...)"}</Label>
+                  <Select value={bulkUpdateAssignee || ""} onValueChange={(v) => setBulkUpdateAssignee(v)} disabled={allQRadar && loadingQRadarUsers}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={allQRadar && loadingQRadarUsers ? "Loading users..." : allQRadar && usersForAssignee.length === 0 ? "No users available" : "Select user"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {usersForAssignee.length > 0 ? (
+                        usersForAssignee.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                        ))
+                      ) : (
+                        <div className="p-2 text-sm text-muted-foreground">
+                          {allQRadar && loadingQRadarUsers ? "Loading users..." : "No users available"}
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            <div className="border-t pt-4 mt-4">
-              <h3 className="text-sm font-semibold mb-3">Analysis (Local Only)</h3>
-              <div className="space-y-2">
-                <Label>Severity Based on Analysis</Label>
-                <Select value={bulkSeverityBasedOnAnalysis || ""} onValueChange={(v) => setBulkSeverityBasedOnAnalysis(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Low">Low</SelectItem>
-                    <SelectItem value="Medium">Medium</SelectItem>
-                    <SelectItem value="High">High</SelectItem>
-                    <SelectItem value="Critical">Critical</SelectItem>
-                  </SelectContent>
-                </Select>
+                {/* Comments - Common to all */}
+                <div className="space-y-2">
+                  <Label htmlFor="comments">Comments</Label>
+                  <Textarea value={bulkUpdateComments} onChange={(e) => setBulkUpdateComments(e.target.value)} />
+                </div>
+
+                {/* SOCFortress Tags section - ONLY for SOCFortress */}
+                {allSocfortress && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Tags</CardTitle>
+                      <CardDescription>Select one or more tags</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {ALERT_TAGS.map((tag) => (
+                        <div key={tag} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`bulk-tag-${tag}`}
+                            checked={bulkSelectedTags.includes(tag)}
+                            onCheckedChange={() => {
+                              setBulkSelectedTags((prev) =>
+                                prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                              )
+                            }}
+                          />
+                          <label htmlFor={`bulk-tag-${tag}`} className="text-sm cursor-pointer">
+                            {tag}
+                          </label>
+                        </div>
+                      ))}
+                      {bulkSelectedTags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {bulkSelectedTags.map((tag) => (
+                            <Badge key={tag} variant="outline">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Stellar Cyber Tags section - ONLY for Stellar Cyber */}
+                {allStellarCyber && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Alert Tags</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Tag Operation</Label>
+                        <div className="flex gap-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              checked={bulkStellarTagMode === "add"}
+                              onChange={() => setBulkStellarTagMode("add")}
+                              className="w-4 h-4"
+                            />
+                            <span className="text-sm">Add Tags</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              checked={bulkStellarTagMode === "delete"}
+                              onChange={() => setBulkStellarTagMode("delete")}
+                              className="w-4 h-4"
+                            />
+                            <span className="text-sm">Remove Tags</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="stellar-new-tag">
+                          {bulkStellarTagMode === "add" ? "Add new tag" : "Remove tag"}
+                        </Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="stellar-new-tag"
+                            placeholder={bulkStellarTagMode === "add" ? "Enter tag name..." : "Enter tag to remove..."}
+                            value={bulkStellarNewTag}
+                            onChange={(e) => setBulkStellarNewTag(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault()
+                                if (bulkStellarNewTag.trim()) {
+                                  if (bulkStellarTagMode === "add") {
+                                    setBulkStellarTagsToAdd([...bulkStellarTagsToAdd, bulkStellarNewTag.trim()])
+                                  } else {
+                                    setBulkStellarTagsToDelete([...bulkStellarTagsToDelete, bulkStellarNewTag.trim()])
+                                  }
+                                  setBulkStellarNewTag("")
+                                }
+                              }
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              if (bulkStellarNewTag.trim()) {
+                                if (bulkStellarTagMode === "add") {
+                                  setBulkStellarTagsToAdd([...bulkStellarTagsToAdd, bulkStellarNewTag.trim()])
+                                } else {
+                                  setBulkStellarTagsToDelete([...bulkStellarTagsToDelete, bulkStellarNewTag.trim()])
+                                }
+                                setBulkStellarNewTag("")
+                              }
+                            }}
+                          >
+                            Add
+                          </Button>
+                        </div>
+                      </div>
+
+                      {bulkStellarTagsToAdd.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium">Tags to Add:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {bulkStellarTagsToAdd.map((tag) => (
+                              <Badge key={`add-${tag}`} variant="default">
+                                {tag}
+                                <X className="h-3 w-3 ml-1 cursor-pointer" onClick={() => {
+                                  setBulkStellarTagsToAdd(bulkStellarTagsToAdd.filter(t => t !== tag))
+                                }} />
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {bulkStellarTagsToDelete.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium">Tags to Remove:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {bulkStellarTagsToDelete.map((tag) => (
+                              <Badge key={`del-${tag}`} variant="secondary">
+                                {tag}
+                                <X className="h-3 w-3 ml-1 cursor-pointer" onClick={() => {
+                                  setBulkStellarTagsToDelete(bulkStellarTagsToDelete.filter(t => t !== tag))
+                                }} />
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Analysis section - For Wazuh and Stellar ONLY (NOT QRadar or SOCFortress) */}
+                {(allWazuh || allStellarCyber) && !allSocfortress && (
+                  <div className="border-t pt-4 mt-4">
+                    <h3 className="text-sm font-semibold mb-3">Analysis (Local Only)</h3>
+                    <div className="space-y-2">
+                      <Label>Severity Based on Analysis</Label>
+                      <Select value={bulkSeverityBasedOnAnalysis || ""} onValueChange={(v) => setBulkSeverityBasedOnAnalysis(v)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Low">Low</SelectItem>
+                          <SelectItem value="Medium">Medium</SelectItem>
+                          <SelectItem value="High">High</SelectItem>
+                          <SelectItem value="Critical">Critical</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2 mt-4">
+                      <Label>Analysis Notes</Label>
+                      <Textarea value={bulkAnalysisNotes} onChange={(e) => setBulkAnalysisNotes(e.target.value)} className="h-20" />
+                    </div>
+                  </div>
+                )}
               </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowBulkUpdateDialog(false)}>Cancel</Button>
+                <Button onClick={async () => {
+                  try {
+                    // Check if closing reason is required for QRadar when status is Closed
+                    const selectedAlertObjs = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
+                    const allQRadar = selectedAlertObjs.every(a => a && (a.integration?.source?.toLowerCase() === 'qradar' || a.source?.toLowerCase() === 'qradar'))
 
-              <div className="space-y-2">
-                <Label>Analysis Notes</Label>
-                <Textarea value={bulkAnalysisNotes} onChange={(e) => setBulkAnalysisNotes(e.target.value)} className="h-20" />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBulkUpdateDialog(false)}>Cancel</Button>
-            <Button onClick={async () => {
-              try {
-                const body = {
-                  alertIds: selectedAlerts,
-                  status: bulkUpdateStatus,
-                  severity: bulkUpdateSeverity,
-                  assignee: bulkUpdateAssignee,
-                  comments: bulkUpdateComments,
-                  severityBasedOnAnalysis: bulkSeverityBasedOnAnalysis,
-                  analysisNotes: bulkAnalysisNotes,
-                }
-                const res = await fetch('/api/alerts/bulk-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-                const data = await res.json()
-                if (!res.ok) throw new Error(data?.error || 'Bulk update failed')
-                // Refresh alerts
-                await loadAlerts(currentPage, pageSize)
-                await loadAllFilteredAlerts()
-                setSelectedAlerts([])
-                setShowBulkUpdateDialog(false)
-              } catch (err) {
-                console.error('Bulk update error', err)
-                alert('Bulk update failed: ' + (err as any).message)
-              }
-            }}>Apply to Selected</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                    if (allQRadar) {
+                      const hasBulkAssignee = Boolean(bulkUpdateAssignee && bulkUpdateAssignee.trim())
+                      const hasMissingExistingAssignee = selectedAlertObjs.some((a) => {
+                        const existing = a?.metadata?.qradar?.assigned_to || a?.metadata?.assignee
+                        return !existing
+                      })
+
+                      if (!hasBulkAssignee && hasMissingExistingAssignee) {
+                        alert("Please assign a user for QRadar bulk update (some selected alerts have no assignee)")
+                        return
+                      }
+                    }
+                    
+                    if (allQRadar && bulkUpdateStatus === "Closed" && !bulkClosingReason) {
+                      alert("Please select a closing reason for QRadar alerts when status is set to Closed")
+                      return
+                    }
+
+                    const body = {
+                      alertIds: selectedAlerts,
+                      status: bulkUpdateStatus,
+                      ...(bulkUpdateSeverity && !allQRadar ? { severity: bulkUpdateSeverity } : {}),
+                      assignee: bulkUpdateAssignee,
+                      comments: bulkUpdateComments,
+                      ...(allQRadar && bulkClosingReason ? { closingReasonId: bulkClosingReason } : {}),
+                      ...(allSocfortress && bulkSelectedTags.length > 0 ? { tags: bulkSelectedTags } : {}),
+                      ...(allStellarCyber && (bulkStellarTagsToAdd.length > 0 || bulkStellarTagsToDelete.length > 0) ? { stellarTagsToAdd: bulkStellarTagsToAdd, stellarTagsToDelete: bulkStellarTagsToDelete } : {}),
+                      ...(bulkSeverityBasedOnAnalysis ? { severityBasedOnAnalysis: bulkSeverityBasedOnAnalysis } : {}),
+                      ...(bulkAnalysisNotes ? { analysisNotes: bulkAnalysisNotes } : {}),
+                    }
+                    const res = await fetch('/api/alerts/bulk-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+                    const data = await res.json()
+                    if (!res.ok) throw new Error(data?.error || 'Bulk update failed')
+                    // Refresh alerts and reset state
+                    await loadAlerts(currentPage, pageSize)
+                    await loadAllFilteredAlerts()
+                    setSelectedAlerts([])
+                    setBulkSelectedTags([])
+                    setBulkStellarTagsToAdd([])
+                    setBulkStellarTagsToDelete([])
+                    setBulkStellarNewTag("")
+                    setBulkUpdateComments("")
+                    setBulkUpdateSeverity(null)
+                    setBulkUpdateAssignee(null)
+                    setBulkClosingReason(null)
+                    setBulkSeverityBasedOnAnalysis(null)
+                    setBulkAnalysisNotes("")
+                    setShowBulkUpdateDialog(false)
+                  } catch (err) {
+                    console.error('Bulk update error', err)
+                    alert('Bulk update failed: ' + (err as any).message)
+                  }
+                }}>Apply to Selected</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
 
       {/* Pagination Controls */}
       {!loading && allFilteredAlerts.length > 0 && totalPages > 1 && (
@@ -1903,18 +2572,63 @@ export default function AlertPanel() {
 
 
       {/* Related Events Modal */}
-      <Dialog open={showRelatedEventsModal} onOpenChange={setShowRelatedEventsModal}>
+      <Dialog 
+        open={showRelatedEventsModal} 
+        onOpenChange={(open) => {
+          setShowRelatedEventsModal(open)
+          if (!open) {
+            setEventsError(null) // Clear error when modal closes
+          }
+        }}
+      >
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Related Events</DialogTitle>
             <DialogDescription>Events related to QRadar Offense {selectedAlert?.metadata?.qradar?.id}</DialogDescription>
           </DialogHeader>
 
+          {/* Error Alert */}
+          {eventsError && (
+            <div className="rounded-md bg-red-50 border border-red-200 p-4">
+              <div className="flex gap-3">
+                <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="font-semibold text-red-900">Error Loading Events</h3>
+                  <p className="text-sm text-red-800 mt-1">{eventsError}</p>
+                  {eventsError.includes("5 minutes") && (
+                    <p className="text-xs text-red-700 mt-2">
+                      💡 Tip: QRadar might be experiencing slow response times. Try again in a few minutes.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">Cached automatically from QRadar sync (last 12 hours). Sync ulang tidak menarik ulang related events yang sudah pernah diambil.</p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                const offenseId = selectedAlert?.metadata?.qradar?.id
+                if (offenseId) {
+                  fetchRelatedEvents(offenseId, true) // forceRefresh=true to fetch from QRadar
+                }
+              }}
+              disabled={loadingEvents || !selectedAlert?.metadata?.qradar?.id || !selectedAlert?.integrationId}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {loadingEvents ? "Fetching..." : "Reload Cached Events"}
+            </Button>
+          </div>
+
           {loadingEvents ? (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
                 <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-                <p className="mt-4 text-muted-foreground">Loading related events...</p>
+                <p className="mt-4 text-muted-foreground">Loading related events from QRadar (up to 5 minutes)...</p>
+                <p className="text-xs text-muted-foreground mt-2">If this takes too long, the request will automatically timeout.</p>
               </div>
             </div>
           ) : relatedEvents && relatedEvents.length > 0 ? (
@@ -2123,7 +2837,10 @@ export default function AlertPanel() {
           open={addToCaseDialogOpen}
           onOpenChange={setAddToCaseDialogOpen}
           alerts={selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]}
-          integrationId={selectedIntegration || undefined}
+          integrationId={(() => {
+            const selectedAlertObjects = selectedAlerts.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]
+            return selectedAlertObjects.length > 0 ? selectedAlertObjects[0].integrationId : undefined
+          })()}
           onSuccess={() => {
             setSelectedAlerts([])
             loadAlerts()
@@ -2187,9 +2904,37 @@ export default function AlertPanel() {
       {/* Wazuh Add to Case Dialog */}
       <WazuhAddToCaseDialog
         open={wazuhAddToCaseOpen}
-        onOpenChange={setWazuhAddToCaseOpen}
+        onOpenChange={(open) => {
+          setWazuhAddToCaseOpen(open)
+          if (!open) {
+            // Clear selection when dialog closes
+            setSelectedAlerts([])
+            setSelectedAlertObjects([])
+          }
+        }}
         alertIds={wazuhCaseAlertIds}
         onCaseCreated={() => {
+          setSelectedAlerts([])
+          setSelectedAlertObjects([])
+          loadAlerts()
+        }}
+      />
+
+      {/* QRadar Add to Case Dialog */}
+      <QRadarAddToCaseDialog
+        open={qradarAddToCaseOpen}
+        onOpenChange={(open) => {
+          setQRadarAddToCaseOpen(open)
+          if (!open) {
+            // Clear selection when dialog closes
+            setSelectedAlerts([])
+            setSelectedAlertObjects([])
+          }
+        }}
+        alertIds={qradarCaseAlertIds}
+        onCaseCreated={() => {
+          setSelectedAlerts([])
+          setSelectedAlertObjects([])
           loadAlerts()
         }}
       />
@@ -2199,7 +2944,9 @@ export default function AlertPanel() {
         <CreateCaseDialog
           open={createCaseDialogOpen}
           onOpenChange={setCreateCaseDialogOpen}
-          selectedAlerts={createCaseAlertIds.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]}
+          selectedAlerts={selectedAlertObjects.length > 0
+            ? selectedAlertObjects.filter((alert) => createCaseAlertIds.includes(alert.id))
+            : createCaseAlertIds.map((id) => alerts.find((a) => a.id === id)).filter(Boolean) as any[]}
           onSuccess={() => {
             setSelectedAlerts([])
             setCreateCaseAlertIds([])

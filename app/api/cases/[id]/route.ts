@@ -5,6 +5,7 @@ import { updateSocfortressCaseStatus, getSocfortressCases } from "@/lib/api/socf
 import { getAssigneeName } from "@/lib/utils"
 import { getCurrentUser } from "@/lib/auth/session"
 import { hasPermission } from "@/lib/auth/password"
+import { normalizeStatus } from "@/lib/utils/status-mapping"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -26,6 +27,11 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       },
     })
 
+    if (caseDetail) {
+      // Normalize status for Stellar/generic cases
+      caseDetail.status = normalizeStatus(caseDetail.status, "stellar")
+    }
+
     // If not found as Case, try as WazuhCase
     if (!caseDetail) {
       const wazuhCase = await prisma.wazuhCase.findUnique({
@@ -37,10 +43,8 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
       if (wazuhCase) {
         // Map WazuhCase to case-like structure
-        // Map Wazuh database statuses to UI statuses
-        let uiStatus = "New"
-        if (wazuhCase.status === "in_progress") uiStatus = "In Progress"
-        else if (wazuhCase.status === "resolved") uiStatus = "Resolved"
+        // Normalize status to UI format
+        const uiStatus = normalizeStatus(wazuhCase.status, "wazuh")
 
         caseDetail = {
           id: wazuhCase.id,
@@ -67,7 +71,51 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       }
     }
 
-    // If not found as Case or WazuhCase, try as Alert (for QRadar)
+    // If not found as Case or WazuhCase, try as QRadarCase
+    if (!caseDetail) {
+      const qradarCase = await prisma.qRadarCase.findUnique({
+        where: { id },
+        include: {
+          assignee: true,
+          alerts: {
+            include: {
+              alert: true,
+            },
+          },
+        },
+      })
+
+      if (qradarCase) {
+        // Map QRadarCase to case-like structure
+        // Normalize status to UI format
+        const uiStatus = normalizeStatus(qradarCase.status, "qradar")
+
+        caseDetail = {
+          id: qradarCase.id,
+          externalId: qradarCase.caseNumber || qradarCase.id,
+          ticketId: parseInt(qradarCase.caseNumber) || 0,
+          name: qradarCase.title,
+          description: qradarCase.description,
+          status: uiStatus,
+          severity: qradarCase.severity,
+          assignee: qradarCase.assigneeId,
+          assigneeName: qradarCase.assignee?.name,
+          createdAt: qradarCase.createdAt,
+          modifiedAt: qradarCase.updatedAt,
+          acknowledgedAt: null,
+          closedAt: qradarCase.resolvedAt,
+          integrationId: qradarCase.alerts?.[0]?.alert?.integrationId || null,
+          integration: { id: null, name: "QRadar", source: "qradar" },
+          metadata: { qradar: true },
+          score: 0,
+          size: qradarCase.alertCount,
+          tags: [],
+          version: 1,
+        }
+      }
+    }
+
+    // If not found as Case, WazuhCase or QRadarCase, try as Alert (for QRadar alerts)
     if (!caseDetail) {
       const alert = await prisma.alert.findUnique({
         where: { id },
@@ -109,7 +157,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
           ticketId: null,
           name: alert.title,
           description: alert.description,
-          status: alert.status,
+          status: normalizeStatus(alert.status, "qradar"),
           severity: alert.severity,
           assignee: alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to || null,
           assigneeName: alert.metadata?.assignee || alert.metadata?.qradar?.assigned_to || null,
@@ -158,7 +206,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
               ticketId: foundCase.ticketId,
               name: foundCase.name,
               description: foundCase.description,
-              status: foundCase.status,
+              status: normalizeStatus(foundCase.status, "socfortress"),
               severity: foundCase.severity,
               assignee: foundCase.metadata?.socfortress?.assigned_to || null,
               assigneeName: foundCase.metadata?.socfortress?.assigned_to || null,
@@ -206,6 +254,74 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       success: false,
       error: "Failed to fetch case details",
     })
+  }
+}
+
+export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    // Check authentication and permission
+    const user = await getCurrentUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    
+    // Only administrators can delete cases
+    if (user.role !== 'administrator') {
+      return NextResponse.json(
+        { error: "Forbidden: Only administrators can delete cases" },
+        { status: 403 }
+      )
+    }
+    
+    const { id } = await params
+
+    // Check if it's a generic Case (Stellar/SOCFortress)
+    const caseToDelete = await prisma.case.findUnique({
+      where: { id },
+    })
+
+    if (caseToDelete) {
+      // Delete from local database only (don't push to remote systems)
+      await prisma.case.delete({
+        where: { id },
+      })
+      return NextResponse.json({ message: 'Case deleted successfully' })
+    }
+
+    // Check if it's a Wazuh case
+    const wazuhCase = await prisma.wazuhCase.findUnique({
+      where: { id },
+    })
+
+    if (wazuhCase) {
+      await prisma.wazuhCase.delete({
+        where: { id },
+      })
+      return NextResponse.json({ message: 'Wazuh case deleted successfully' })
+    }
+
+    // Check if it's a QRadar case
+    const qradarCase = await prisma.qRadarCase.findUnique({
+      where: { id },
+    })
+
+    if (qradarCase) {
+      await prisma.qRadarCase.delete({
+        where: { id },
+      })
+      return NextResponse.json({ message: 'QRadar case deleted successfully' })
+    }
+
+    return NextResponse.json(
+      { error: 'Case not found' },
+      { status: 404 }
+    )
+  } catch (error) {
+    console.error('Error deleting case:', error)
+    return NextResponse.json(
+      { error: 'Failed to delete case' },
+      { status: 500 }
+    )
   }
 }
 

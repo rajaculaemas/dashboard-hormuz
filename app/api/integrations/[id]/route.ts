@@ -1,7 +1,32 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { prisma } from "@/lib/prisma"
+import prisma from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/auth/session"
 import { getUserAccessibleIntegrations } from "@/lib/auth/password"
+
+function toCredentialsObject(raw: any): Record<string, any> {
+  if (!raw) return {}
+  if (Array.isArray(raw)) {
+    const out: Record<string, any> = {}
+    for (const item of raw) {
+      if (item && typeof item === "object" && "key" in item && "value" in item) {
+        out[String((item as any).key)] = (item as any).value
+      }
+    }
+    return out
+  }
+  if (typeof raw === "object") return raw
+  return {}
+}
+
+function isUnknownSoarColumnError(error: unknown): boolean {
+  const message = String((error as any)?.message || "")
+  return (
+    message.includes("Unknown argument `soarHost`") ||
+    message.includes("Unknown argument `soarOrgId`") ||
+    message.includes("Unknown argument `soarKeyId`") ||
+    message.includes("Unknown argument `soarKeySecret`")
+  )
+}
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -76,20 +101,49 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       )
     }
     
-    const { name, source, credentials, status } = body
+    const { name, source, credentials, status, config } = body
+    const creds = toCredentialsObject(credentials)
+
+    const soarHost = String(body?.soarHost || creds.soar_host || "").trim() || null
+    const soarOrgId = String(body?.soarOrgId || creds.soar_org_id || "").trim() || null
+    const soarKeyId = String(body?.soarKeyId || creds.soar_key_id || "").trim() || null
+    const soarKeySecret = String(body?.soarKeySecret || creds.soar_key_secret || "").trim() || null
 
     console.log("Updating integration:", id)
     console.log("Update data:", { name, source, credentialsKeys: Object.keys(credentials || {}) })
 
-    const integration = await prisma.integration.update({
-      where: { id },
-      data: {
-        name,
-        source,
-        credentials: credentials || {},
-        status: status || "connected",
-      },
-    })
+    let integration
+    try {
+      integration = await prisma.integration.update({
+        where: { id },
+        data: {
+          name,
+          source,
+          credentials: credentials || {},
+          config: config || {},
+          soarHost,
+          soarOrgId,
+          soarKeyId,
+          soarKeySecret,
+          status: status || "connected",
+        },
+      })
+    } catch (error) {
+      // Backward compatibility when Prisma Client is not regenerated yet.
+      if (!isUnknownSoarColumnError(error)) throw error
+
+      console.warn("[integrations][PUT] SOAR columns not recognized by Prisma Client, falling back to credentials-only save")
+      integration = await prisma.integration.update({
+        where: { id },
+        data: {
+          name,
+          source,
+          credentials: credentials || {},
+          config: config || {},
+          status: status || "connected",
+        },
+      })
+    }
 
     return NextResponse.json({
       success: true,

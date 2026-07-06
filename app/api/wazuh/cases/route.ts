@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPermission } from '@/lib/auth/password';
+import { normalizeStatus } from '@/lib/utils/status-mapping';
 
 // GET all Wazuh cases with filters
 export async function GET(request: NextRequest) {
@@ -31,28 +32,59 @@ export async function GET(request: NextRequest) {
     let endDate = new Date();
 
     if (fromDate && toDate) {
-      // Parse YYYY-MM-DD format as UTC+7 local date
-      // fromDate is like "2025-12-10" which should be Dec 10 00:00 UTC+7
-      // We need to convert this to UTC for database query
+      // Handle both formats:
+      // 1. ISO datetime strings: "2026-05-03T17:00:00.000Z"
+      // 2. Date-only strings: "2026-05-03"
       
-      // Parse as UTC first
-      const fromUTC = new Date(fromDate + 'T00:00:00Z')
-      const toUTC = new Date(toDate + 'T00:00:00Z')
+      // Check if format is ISO datetime (contains T) or date-only (doesn't contain T)
+      if (fromDate.includes('T')) {
+        // ISO datetime format - parse directly
+        startDate = new Date(fromDate)
+        endDate = new Date(toDate)
+        
+        console.log("Using ISO datetime format:", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          parsedFromUTC: startDate.toISOString(),
+          parsedToUTC: endDate.toISOString(),
+        })
+      } else {
+        // Date-only format (legacy): "2026-05-03"
+        // Parse as UTC+7 local date and convert to UTC
+        
+        const fromUTC = new Date(fromDate + 'T00:00:00Z')
+        const toUTC = new Date(toDate + 'T00:00:00Z')
+        
+        // Adjust by UTC+7 offset (subtract 7 hours to get back to UTC)
+        // UTC+7 means local time is 7 hours ahead, so to convert local to UTC we subtract 7 hours
+        const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
+        startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+        
+        // For end date, we want the last second of that date in UTC+7
+        // Which is 7 hours before the start of the next day in UTC+7
+        const nextDayUTC = new Date(toUTC.getTime() + 24 * 60 * 60 * 1000)
+        endDate = new Date(nextDayUTC.getTime() - UTC_PLUS_7_OFFSET_MS - 1)
+        
+        console.log("Using date-only format (UTC+7 conversion):", {
+          rawFromDate: fromDate,
+          rawToDate: toDate,
+          startDateUTC: startDate.toISOString(),
+          endDateUTC: endDate.toISOString(),
+        })
+      }
       
-      // Adjust by UTC+7 offset (subtract 7 hours to get back to UTC)
-      // UTC+7 means local time is 7 hours ahead, so to convert local to UTC we subtract 7 hours
-      const UTC_PLUS_7_OFFSET_MS = 7 * 60 * 60 * 1000
-      startDate = new Date(fromUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
-      endDate = new Date(toUTC.getTime() - UTC_PLUS_7_OFFSET_MS)
+      // Validate dates
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        console.error("Invalid date range:", { startDate, endDate })
+        return NextResponse.json(
+          { error: 'Invalid date range provided' },
+          { status: 400 }
+        )
+      }
       
-      // Set end date to end of day (23:59:59.999) in UTC to include all cases on that calendar day
-      endDate.setUTCHours(23, 59, 59, 999)
-      
-      console.log("Using absolute date range (UTC+7):", {
-        rawFromDate: fromDate,
-        rawToDate: toDate,
-        startDateUTC: startDate.toISOString(),
-        endDateUTC: endDate.toISOString(),
+      console.log("Final date range for query:", {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
       })
     } else if (timeRange) {
       // Relative time range
@@ -90,6 +122,14 @@ export async function GET(request: NextRequest) {
       lte: endDate,
     };
     
+    console.log("[Wazuh Cases API] WHERE clause:", {
+      createdAt: where.createdAt,
+      status: where.status,
+      assigneeId: where.assigneeId,
+      severity: where.severity,
+      caseId: where.id
+    })
+    
     // If caseId is provided, fetch only that case
     if (caseId) {
       where.id = caseId;
@@ -126,10 +166,48 @@ export async function GET(request: NextRequest) {
       prisma.wazuhCase.count({ where }),
     ]);
 
+    console.log("[Wazuh Cases API] Query result:", {
+      requestParams: {
+        caseId,
+        status,
+        assigneeId,
+        severity,
+        fromDate,
+        toDate,
+        timeRange,
+        page,
+        limit
+      },
+      resultCount: cases.length,
+      totalCount: total
+    })
+
+    // Add integrationId and normalize status for each case (extracted from linked alerts)
+    const casesWithIntegration = cases.map((wazuhCase) => {
+      let integrationId: string | null = null
+      
+      // Extract integrationId from first alert
+      // All alerts in a case should have the same integrationId
+      if (wazuhCase.alerts && wazuhCase.alerts.length > 0) {
+        if (wazuhCase.alerts[0]?.alert?.integrationId) {
+          integrationId = wazuhCase.alerts[0].alert.integrationId
+        }
+      }
+
+      // Normalize status to UI format
+      const normalizedStatus = normalizeStatus(wazuhCase.status, "wazuh")
+
+      return {
+        ...wazuhCase,
+        status: normalizedStatus,
+        integrationId,
+      }
+    })
+
     const totalPages = Math.ceil(total / limit);
 
     return NextResponse.json({
-      cases,
+      cases: casesWithIntegration,
       pagination: {
         page,
         limit,

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { PrismaClient } from '@prisma/client';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPermission } from '@/lib/auth/password';
+
+// Create or reuse Prisma client
+const globalForPrisma = global as unknown as { prisma: PrismaClient }
+const prisma = globalForPrisma.prisma || new PrismaClient()
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
+
+console.log('[Analyses API] Prisma initialized:', typeof prisma, prisma ? 'defined' : 'undefined');
 
 // GET all analyses for an alert
 export async function GET(
@@ -9,12 +16,16 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const user = await getCurrentUser();
+    console.log('[Analyses API] GET handler called, prisma:', typeof prisma);
+    const { id } = await params
+    console.log('[Analyses API] Alert ID:', id);
+    
+    const user = await getCurrentUser()
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    console.log('[Analyses API] About to call prisma.alertAnalysis.findMany, prisma type:', typeof prisma);
     const analyses = await prisma.alertAnalysis.findMany({
       where: { alertId: id },
       select: {
@@ -42,8 +53,9 @@ export async function GET(
     });
   } catch (error) {
     console.error('Get analyses error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to fetch analyses' },
+      { error: 'Failed to fetch analyses', details: errorMessage },
       { status: 500 }
     );
   }

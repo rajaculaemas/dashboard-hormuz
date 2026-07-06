@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
-import { testStellarCyberConnection } from "@/lib/api/stellar-cyber-client"
+// import { testStellarCyberConnection } from "@/lib/api/stellar-cyber-client"
 import https from "https"
 
 // POST /api/integrations/test - Menguji koneksi integrasi

@@ -1,0 +1,32 @@
+Dear MSIG Team,
+Kami mendeteksi adanya case MSIG - Multiple Failed Windows Login from Single User (More than 10) dengan analisis sebagai berikut:  
+ 
+Case Name: MSIG - Multiple Failed Windows Login from Single User (More than 10)
+Case ID: 
+Time Alert Detection: 2026-07-06 12:29:10
+Time Case Created: 2026-07-06 12:29:10
+Count of alerts: 1
+Source IP/Host: 192.168.13.45 (BCP053-NB)
+Username: Administrator Destination IP : 172.16.0.13
+Risk/Severity Level: Low
+Potential Impact:
+1. Compromised Account
+ 
+Description :  
+Tim SOC mendeteksi aktivitas Multiple Failed Windows Login terhadap akun administrator yang berasal dari source IP
+BCP053-NB dengan total 20 kali percobaan login gagal dalam periode waktu yang telah ditentukan. Berdasarkan
+hasil observasi, teridentifikasi adanya serangkaian kegagalan autentikasi pada sistem Windows yang tercatat sebagai Event ID 4625 dengan Error Code  0xC000006A, yang mengindikasikan kegagalan proses login akibat salah password. Aktivitas tersebut terjadi pada waktu 12:29:34 PM dan berasal dari host/source BCP053-NB, dengan target account berupa administrator. Hasil analisis awal menunjukkan bahwa source IP tersebut juga teridentifikasi melakukan percobaan login berulang terhadap account yang sama, sehingga diperlukan verifikasi lebih lanjut untuk memastikan apakah aktivitas tersebut merupakan kesalahan kredensial yang sah, penggunaan password lama pada aplikasi atau service, atau aktivitas operasional yang valid. Apabila aktivitas ini tidak dapat tervalidasi, maka temuan tersebut berpotensi mengindikasikan upaya brute force, password guessing, atau percobaan akses tidak sah terhadap account yang bersangkutan.
+ 
+Recommendation :  
+1. Mengkonfirmasi Apakah aktivitas tersebut Authorized
+2. Jika tidak authorized, segera disable akun dan lakukan reset password
+3. Lakukan pengecekkan process background apakah masih ada schedule task yang masih menggunakan kredensial yang lama
+4. Melakukan sinkronisasi Kredential Update
+
+ 
+Mohon dilakukan penanganan sesuai dengan rekomendasi yang kami berikan untuk mengurangi risiko dan mencegah terjadinya insiden keamanan lebih lanjut.
+ 
+Demikian yang dapat kami sampaikan. Terima kasih.
+ 
+Best Regards,
+SOC 247

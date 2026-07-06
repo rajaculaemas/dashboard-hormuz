@@ -127,14 +127,19 @@ export const useAlertStore = create<AlertStore>((set, get) => ({
         params.append("severity", filters.severity)
       }
 
-      const response = await fetch(`/api/alerts?${params.toString()}`)
+      const paramsStr = params.toString()
+      console.log(`[Alert Store] Fetching alerts with params: ${paramsStr}`)
+      
+      const response = await fetch(`/api/alerts?${paramsStr}`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch alerts: ${response.statusText}`)
       }
 
       const data = await response.json()
-      setAlerts(data.data || data.alerts || [])
+      const alertsData = data.data || data.alerts || []
+      console.log(`[Alert Store] Fetched ${alertsData.length} alerts`)
+      setAlerts(alertsData)
     } catch (error) {
       console.error("Error fetching alerts:", error)
       setError(error instanceof Error ? error.message : "Failed to fetch alerts")

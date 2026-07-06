@@ -6,7 +6,7 @@ import prisma from "@/lib/prisma"
 
 /**
  * GET /api/users/[userId]/stellar-key
- * Check if user has Stellar Cyber API key configured
+ * Check if user has Stellar Cyber API key configured (checks both global and per-host)
  * User can check their own key, admin can check any user
  */
 export async function GET(
@@ -21,7 +21,7 @@ export async function GET(
 
     const { userId } = await params
 
-    console.log(`[Stellar Key Check] Checking JWT key for user: ${userId}`)
+    console.log(`[Stellar Key Check] Checking API key for user: ${userId}`)
 
     // Allow user to check their own key, or admin to check others
     if (currentUser.id !== userId && !hasPermission(currentUser.role, "update_user")) {
@@ -35,7 +35,7 @@ export async function GET(
     // Verify user exists
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, name: true, stellarCyberApiKey: true },
+      select: { id: true, email: true, name: true, stellar_cyber_api_key: true },
     })
 
     if (!user) {
@@ -43,12 +43,23 @@ export async function GET(
       return NextResponse.json({ error: "User not found" }, { status: 404 })
     }
 
-    const hasKey = !!(user.stellarCyberApiKey && user.stellarCyberApiKey.trim() !== "")
+    // Check global API key (legacy)
+    const hasGlobalKey = !!(user.stellar_cyber_api_key && user.stellar_cyber_api_key.trim() !== "")
+
+    // Check per-host API keys (new approach)
+    const hostCredentials = await prisma.userStellarCyberHostCredential.findMany({
+      where: { userId },
+      select: { host: true, apiKey: true },
+    })
+
+    const hasHostKeys = hostCredentials.length > 0 && hostCredentials.some(c => c.apiKey && c.apiKey.trim() !== "")
+    const hasKey = hasGlobalKey || hasHostKeys
 
     console.log(`[Stellar Key Check] Result for user ${userId}:`, {
       hasKey,
-      keyLength: user.stellarCyberApiKey?.length || 0,
-      keyTrimmed: user.stellarCyberApiKey?.trim().length || 0,
+      hasGlobalKey,
+      hasHostKeys,
+      hostCount: hostCredentials.length,
     })
 
     return NextResponse.json({
@@ -57,6 +68,9 @@ export async function GET(
       userEmail: user.email,
       userName: user.name,
       hasKey,
+      hasGlobalKey,
+      hasHostKeys,
+      hostCount: hostCredentials.length,
       message: hasKey ? "User has Stellar API key configured" : "User does not have Stellar API key",
     })
   } catch (error) {

@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Switch } from "@/components/ui/switch"
 import { useIntegrationStore } from "@/lib/stores/integration-store"
 import type {
   Integration,
@@ -26,6 +27,38 @@ interface IntegrationFormProps {
   onClose: () => void
 }
 
+const QRADAR_REQUIRED_CREDENTIALS: IntegrationCredential[] = [
+  { key: "host", value: "", isSecret: false },
+  { key: "api_key", value: "", isSecret: true },
+  { key: "domain_id", value: "", isSecret: false },
+  { key: "soar_host", value: "", isSecret: false },
+  { key: "soar_org_id", value: "", isSecret: false },
+  { key: "soar_key_id", value: "", isSecret: false },
+  { key: "soar_key_secret", value: "", isSecret: true },
+]
+
+function normalizeCredentialValue(value: unknown): string {
+  if (value === null || value === undefined) return ""
+  return String(value)
+}
+
+function ensureQradarCredentials(input: IntegrationCredential[]): IntegrationCredential[] {
+  const byKey = new Map<string, IntegrationCredential>()
+  for (const item of input) {
+    const key = String(item.key || "").trim()
+    if (!key) continue
+    byKey.set(key, item)
+  }
+
+  for (const required of QRADAR_REQUIRED_CREDENTIALS) {
+    if (!byKey.has(required.key)) {
+      byKey.set(required.key, required)
+    }
+  }
+
+  return Array.from(byKey.values())
+}
+
 export function IntegrationForm({ integration, onClose }: IntegrationFormProps) {
   const { addIntegration, updateIntegration } = useIntegrationStore()
   const [activeTab, setActiveTab] = useState<IntegrationType>("alert")
@@ -37,6 +70,8 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
+  const [qradarAutoFetchRelatedEvents, setQradarAutoFetchRelatedEvents] = useState(true)
+  const [socfortressCustomerCode, setSocfortressCustomerCode] = useState("")
 
   useEffect(() => {
     if (integration) {
@@ -46,30 +81,78 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
       setSource(integration.source)
       setMethod(integration.method)
 
+      // Load customer code from config for Socfortress
+      if ((integration.source === "socfortress" || integration.source === "copilot") && integration.config) {
+        setSocfortressCustomerCode((integration.config as any)?.socfortressCustomerCode || "")
+      }
+
       // Konversi kredensial dari berbagai format ke array IntegrationCredential
       if (Array.isArray(integration.credentials)) {
-        setCredentials(integration.credentials)
+        const normalizedArray = integration.credentials.map((cred) => ({
+          ...cred,
+          key: String(cred.key || ""),
+          value: normalizeCredentialValue((cred as any).value),
+        }))
+        const normalized = integration.source === "qradar"
+          ? ensureQradarCredentials(normalizedArray)
+          : normalizedArray
+        setCredentials(normalized)
+        if (integration.source === "qradar") {
+          const autoFetchRaw = normalized.find((cred) => cred.key === "auto_fetch_related_events")?.value
+          const autoFetch =
+            autoFetchRaw === undefined || autoFetchRaw === null
+              ? true
+              : !["false", "0", "off", "no", "disabled"].includes(String(autoFetchRaw).toLowerCase())
+          setQradarAutoFetchRelatedEvents(autoFetch)
+        }
       } else if (integration.credentials && typeof integration.credentials === "object") {
         const credArray: IntegrationCredential[] = []
         for (const [key, value] of Object.entries(integration.credentials)) {
           credArray.push({
-            key,
-            value: value as string,
+            key: String(key),
+            value: normalizeCredentialValue(value),
             isSecret: key.toLowerCase().includes("token") || key.toLowerCase().includes("secret"),
           })
         }
-        setCredentials(credArray)
+        if (integration.source === "qradar") {
+          const dbIntegration = integration as any
+          if (dbIntegration.soarHost) {
+            credArray.push({ key: "soar_host", value: String(dbIntegration.soarHost), isSecret: false })
+          }
+          if (dbIntegration.soarOrgId) {
+            credArray.push({ key: "soar_org_id", value: String(dbIntegration.soarOrgId), isSecret: false })
+          }
+          if (dbIntegration.soarKeyId) {
+            credArray.push({ key: "soar_key_id", value: String(dbIntegration.soarKeyId), isSecret: false })
+          }
+          if (dbIntegration.soarKeySecret) {
+            credArray.push({ key: "soar_key_secret", value: String(dbIntegration.soarKeySecret), isSecret: true })
+          }
+        }
+        const normalized = integration.source === "qradar"
+          ? ensureQradarCredentials(credArray)
+          : credArray
+        setCredentials(normalized)
+        if (integration.source === "qradar") {
+          const autoFetchRaw = (integration.credentials as any)?.auto_fetch_related_events
+          const autoFetch =
+            autoFetchRaw === undefined || autoFetchRaw === null
+              ? true
+              : !["false", "0", "off", "no", "disabled"].includes(String(autoFetchRaw).toLowerCase())
+          setQradarAutoFetchRelatedEvents(autoFetch)
+        }
       } else {
-        setCredentials([])
+        setCredentials(integration.source === "qradar" ? [...QRADAR_REQUIRED_CREDENTIALS] : [])
+        if (integration.source === "qradar") {
+          setQradarAutoFetchRelatedEvents(true)
+        }
       }
     } else {
       // Default credentials based on source and method
       if (method === "api") {
         if (source === "qradar") {
-          setCredentials([
-            { key: "host", value: "", isSecret: false },
-            { key: "api_key", value: "", isSecret: true },
-          ])
+          setCredentials([...QRADAR_REQUIRED_CREDENTIALS])
+          setQradarAutoFetchRelatedEvents(true)
         } else if (source === "stellar-cyber") {
           setCredentials([
             { key: "host", value: "", isSecret: false },
@@ -118,7 +201,17 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
   const handleCredentialChange = (index: number, field: keyof IntegrationCredential, value: any) => {
     setCredentials(
       credentials.map((cred, i) =>
-        i === index ? { ...cred, [field]: field === "isSecret" ? !cred.isSecret : value } : cred,
+        i === index
+          ? {
+              ...cred,
+              [field]:
+                field === "isSecret"
+                  ? !cred.isSecret
+                  : field === "value"
+                    ? normalizeCredentialValue(value)
+                    : value,
+            }
+          : cred,
       ),
     )
   }
@@ -148,7 +241,9 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
 
       // Validate credentials
       for (const cred of credentials) {
-        if (!cred.key.trim() || !cred.value.trim()) {
+        const key = String(cred.key || "").trim()
+        const value = normalizeCredentialValue(cred.value).trim()
+        if (!key || !value) {
           throw new Error("All credential fields are required")
         }
       }
@@ -156,7 +251,9 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
       // Convert credentials array to object for API
       const credentialsObject: Record<string, string> = {}
       credentials.forEach((cred) => {
-        credentialsObject[cred.key] = cred.value
+        const key = String(cred.key || "").trim()
+        if (!key) return
+        credentialsObject[key] = normalizeCredentialValue(cred.value)
       })
 
       const integrationData = {
@@ -164,8 +261,21 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
         type: activeTab,
         source,
         method,
-        credentials: credentialsObject, // Use object format instead of array
+        credentials: {
+          ...credentialsObject,
+          ...(source === "qradar" ? { auto_fetch_related_events: String(qradarAutoFetchRelatedEvents) } : {}),
+        }, // Use object format instead of array
+        soarHost: credentialsObject.soar_host || null,
+        soarOrgId: credentialsObject.soar_org_id || null,
+        soarKeyId: credentialsObject.soar_key_id || null,
+        soarKeySecret: credentialsObject.soar_key_secret || null,
         description,
+        // Add config for Socfortress customer code
+        ...(source === "socfortress" || source === "copilot" ? {
+          config: {
+            socfortressCustomerCode: socfortressCustomerCode.trim(),
+          },
+        } : {}),
       }
 
       console.log("Submitting integration with data:", {
@@ -263,6 +373,40 @@ export function IntegrationForm({ integration, onClose }: IntegrationFormProps) 
               placeholder="Describe this integration..."
               rows={3}
             />
+            {source === "qradar" && (
+              <p className="text-xs text-muted-foreground">
+                For QRadar + SOAR, fill: host, api_key, domain_id, soar_host, soar_org_id, soar_key_id, and soar_key_secret.
+              </p>
+            )}
+            {source === "qradar" && (
+              <div className="mt-3 flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <p className="text-sm font-medium">Auto-fetch Related Events</p>
+                  <p className="text-xs text-muted-foreground">
+                    Automatically fetch QRadar related events during sync for uncached offenses.
+                  </p>
+                </div>
+                <Switch
+                  checked={qradarAutoFetchRelatedEvents}
+                  onCheckedChange={setQradarAutoFetchRelatedEvents}
+                />
+              </div>
+            )}
+            {(source === "socfortress" || source === "copilot") && (
+              <div className="mt-3 space-y-2 rounded-md border p-3">
+                <Label htmlFor="socfortress-customer-code" className="text-sm font-medium">Customer Code (Optional)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Specify a customer code to filter alerts. Leave empty to fetch all alerts.
+                </p>
+                <Input
+                  id="socfortress-customer-code"
+                  value={socfortressCustomerCode}
+                  onChange={(e) => setSocfortressCustomerCode(e.target.value)}
+                  placeholder="e.g., posindonesia"
+                  className="text-sm"
+                />
+              </div>
+            )}
           </div>
         </TabsContent>
 

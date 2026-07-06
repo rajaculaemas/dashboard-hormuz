@@ -16,11 +16,14 @@ const publicPaths = [
   "/api/telegram/polling-init", // Allow polling init without auth
   "/api/telegram/polling-stop", // Allow polling stop without auth
   "/api/health/telegram-polling", // Allow polling health check without auth
+  "/api/cron/shift-recap", // Allow cron to trigger shift recap without auth (verified via x-cron-secret header)
+  "/api/cron/escalation-timeout-check", // Allow cron to check escalation timeouts without auth (verified via x-cron-secret header)
 ]
 
 // Middleware untuk menangani CORS dan authentication routing
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
+  const origin = request.headers.get("origin") || "http://localhost:3000"
 
   // Skip middleware untuk public paths
   const isPublicPath = publicPaths.some(path => pathname.startsWith(path))
@@ -37,14 +40,22 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
+  // Allow internal background sync requests with special header (before token check)
+  const isInternalSync = request.headers.get("x-internal-sync") === "true"
+  if (isInternalSync && pathname.includes("/api/qradar/offenses/")) {
+    console.debug(`[Middleware] Internal sync allowed: ${pathname}`)
+    return NextResponse.next()
+  }
+
   let response = NextResponse.next()
 
-  // CORS headers untuk API
+  // CORS headers untuk API - dengan credentials support
   if (pathname.startsWith("/api/")) {
     response = NextResponse.next()
-    response.headers.set("Access-Control-Allow-Origin", "*")
-    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    response.headers.set("Access-Control-Allow-Origin", origin)
+    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
     response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    response.headers.set("Access-Control-Allow-Credentials", "true")
   }
 
   // Skip middleware untuk static files dan next internals

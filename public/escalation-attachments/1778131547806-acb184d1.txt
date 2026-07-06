@@ -1,0 +1,34 @@
+Dear POS Team,
+Kami menyampaikan notifikasi terkait aktivitas keamanan mencurigakan yang terdeteksi oleh SIEM, dengan detail sebagai berikut:
+
+Alert Information:
+•  Case ID: 155
+•⁠  ⁠Alert Name: new:oozushirp.com(109020001)
+•⁠  ⁠Detected Date and Time: Apr 30, 2026 06:33:46.000
+•⁠  ⁠Source IP: 10.33.64.3 dan 103.146.135.2 
+•⁠  ⁠Total Alerts: 2
+•⁠  ⁠Risk / Severity Level: Medium
+
+Alert / Incident Description:
+SIEM mendeteksi aktivitas akses menuju domain yang terindikasi sebagai newly observed DNS domain, yaitu oozushirp[.]com, yang berasal dari host 192.168.10.52. Aktivitas terdeteksi sebanyak 3 kali pada Apr 30, 2026 06:33. Deteksi ini mengindikasikan adanya kemungkinan akses ke domain yang belum dikenal dan berpotensi digunakan untuk aktivitas berbahaya seperti phishing, command-and-control (C2), atau distribusi malware.
+
+Risk Assessment:
+Belum ditemukan indikasi eksploitasi lanjutan seperti payload delivery atau lateral movement. Namun, pola domain baru mengindikasikan potensi attempted C2 communication.
+
+Potential Impact:
+1.⁠ ⁠Device Compromise
+2.⁠ ⁠Malware Beaconing via DNS
+Sehingga aktivitas ini dikategorikan sebagai attempted attack dengan tingkat risiko Medium.
+
+⸻
+Current Status (SOC Action):
+Tim SOC telah melakukan request block domain dan IP mencurigakan tersebut sebagai langkah mitigasi awal. 
+⸻
+
+Recommended Actions:
+1.⁠ ⁠Melakukan pengecekan terhadap DNS request tersebut
+
+Apabila terdapat aktivitas legitimate yang relevan, mohon dikonfirmasikan kepada tim SOC untuk keperluan validasi dan tuning. Terima kasih.
+
+Best regards,
+SOC247 - Jega

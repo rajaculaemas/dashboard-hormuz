@@ -5,11 +5,14 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Send, Bot, User, Loader2, Database, Trash } from "lucide-react"
 import { cn } from "@/lib/utils"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 interface Message {
   id: string
@@ -25,13 +28,14 @@ export default function ChatPage() {
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const initialized = useRef(false)
+  const pendingAlertContext = useRef<string | null>(null)
 
   // 1. Load messages dari localStorage saat komponen mount
   useEffect(() => {
     if (typeof window === "undefined" || initialized.current) return
-    
+
     try {
       const saved = localStorage.getItem("soc_assistant_chat")
       if (saved) {
@@ -55,6 +59,13 @@ export default function ChatPage() {
     }
 
     initialized.current = true
+
+    // Check sessionStorage for alert context passed from "Ask SOC GPT" button
+    const pending = localStorage.getItem("soc_alert_context")
+    if (pending) {
+      localStorage.removeItem("soc_alert_context")
+      pendingAlertContext.current = pending
+    }
   }, [])
 
   // 2. Auto-save ke localStorage saat messages berubah
@@ -92,6 +103,69 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages])
 
+  // Core send function — used by both handleSubmit and auto-send from alert context
+  const sendMessageText = async (text: string, currentMessages?: Message[]) => {
+    if (!text.trim() || isLoading) return
+    const base = currentMessages ?? messages
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: text.trim(),
+      timestamp: new Date(),
+    }
+    const loadingMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+      isLoading: true,
+    }
+    setMessages((prev) => [...prev, userMessage, loadingMessage])
+    setInput("")
+    setIsLoading(true)
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [...base, userMessage].map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+        }),
+      })
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const data = await response.json()
+      const assistantMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        role: "assistant",
+        content: data.choices?.[0]?.message?.content || "Sorry, I couldn't process your request.",
+        timestamp: new Date(),
+      }
+      setMessages((prev) => prev.slice(0, -1).concat(assistantMessage))
+    } catch (error) {
+      console.error("Error:", error)
+      const errorMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        role: "assistant",
+        content: "Sorry, I encountered an error while processing your request. Please try again.",
+        timestamp: new Date(),
+      }
+      setMessages((prev) => prev.slice(0, -1).concat(errorMessage))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Auto-send pending alert context after messages are initialized
+  useEffect(() => {
+    if (!pendingAlertContext.current || isLoading) return
+    const text = pendingAlertContext.current
+    pendingAlertContext.current = null
+    sendMessageText(text, messages)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length === 1 ? messages[0]?.id : null])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isLoading) return
@@ -111,49 +185,7 @@ export default function ChatPage() {
       isLoading: true,
     }
 
-    setMessages((prev) => [...prev, userMessage, loadingMessage])
-    setInput("")
-    setIsLoading(true)
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: [...messages, userMessage].map((msg) => ({
-            role: msg.role,
-            content: msg.content,
-          })),
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data = await response.json()
-      const assistantMessage: Message = {
-        id: (Date.now() + 2).toString(),
-        role: "assistant",
-        content: data.choices?.[0]?.message?.content || "Sorry, I couldn't process your request.",
-        timestamp: new Date(),
-      }
-
-      setMessages((prev) => prev.slice(0, -1).concat(assistantMessage))
-    } catch (error) {
-      console.error("Error:", error)
-      const errorMessage: Message = {
-        id: (Date.now() + 2).toString(),
-        role: "assistant",
-        content: "Sorry, I encountered an error while processing your request. Please try again.",
-        timestamp: new Date(),
-      }
-      setMessages((prev) => prev.slice(0, -1).concat(errorMessage))
-    } finally {
-      setIsLoading(false)
-    }
+    await sendMessageText(input.trim())
   }
 
   const suggestedQuestions = [
@@ -172,36 +204,36 @@ export default function ChatPage() {
 
   // Render UI (hanya tambahkan tombol clear chat)
   return (
-<div className="container mx-auto p-6 max-w-4xl">
-  <div className="flex flex-col h-[calc(100vh-8rem)]">
-    <Card className="flex-1 flex flex-col">
-      <CardHeader className="pb-4">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Bot className="h-6 w-6 text-primary" />
-              <CardTitle>SOC Assistant</CardTitle>
+    <div className="container mx-auto p-6 max-w-7xl">
+      <div className="flex flex-col h-[calc(100vh-8rem)]">
+        <Card className="flex-1 flex flex-col">
+          <CardHeader className="pb-4">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-6 w-6 text-primary" />
+                  <CardTitle>SOC Assistant</CardTitle>
+                </div>
+                <Badge variant="secondary" className="flex items-center gap-1">
+                  <Database className="h-3 w-3" />
+                  Connected to Alert Database
+                </Badge>
+              </div>
+              {/* Tombol Clear Chat dengan background hitam */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clearChat}
+                className="bg-red-500 text-white hover:bg-gray-800 hover:text-white dark:bg-gray-900 dark:hover:bg-gray-800"
+              >
+                <Trash className="h-4 w-4 mr-2" />
+                Clear Chat
+              </Button>
             </div>
-            <Badge variant="secondary" className="flex items-center gap-1">
-              <Database className="h-3 w-3" />
-              Connected to Alert Database
-            </Badge>
-          </div>
-          {/* Tombol Clear Chat dengan background hitam */}
-          <Button 
-            variant="outline"
-            size="sm" 
-            onClick={clearChat}
-            className="bg-red-500 text-white hover:bg-gray-800 hover:text-white dark:bg-gray-900 dark:hover:bg-gray-800"
-          >
-            <Trash className="h-4 w-4 mr-2" />
-            Clear Chat
-          </Button>
-        </div>
-        <CardDescription>
-          AI-powered security operations assistant with real-time alert database access
-        </CardDescription>
-      </CardHeader>
+            <CardDescription>
+              AI-powered security operations assistant with real-time alert database access
+            </CardDescription>
+          </CardHeader>
 
           {/* ... (bagian render messages dan form tetap sama persis) ... */}
           <CardContent className="flex-1 flex flex-col p-0">
@@ -238,6 +270,26 @@ export default function ChatPage() {
                           <Loader2 className="h-4 w-4 animate-spin" />
                           <span>Thinking...</span>
                         </div>
+                      ) : message.role === "assistant" ? (
+                        <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code({ className, children, ...props }: any) {
+                                const isBlock = className?.includes("language-")
+                                return isBlock ? (
+                                  <pre className="bg-background/60 border rounded p-2 overflow-x-auto text-xs my-1">
+                                    <code className={className} {...props}>{children}</code>
+                                  </pre>
+                                ) : (
+                                  <code className="bg-background/60 border rounded px-1 py-0.5 text-xs font-mono" {...props}>{children}</code>
+                                )
+                              },
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
                       ) : (
                         <div className="whitespace-pre-wrap">{message.content}</div>
                       )}
@@ -270,14 +322,22 @@ export default function ChatPage() {
             )}
 
             <form onSubmit={handleSubmit} className="p-4">
-              <div className="flex gap-2">
-                <Input
+              <div className="flex gap-2 items-end">
+                <Textarea
                   ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="tanya apa aja.... bahasa inggris juga bisa"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      if (!input.trim() || isLoading) return
+                      handleSubmit(e as any)
+                    }
+                  }}
+                  placeholder="tanya apa aja.... bahasa inggris juga bisa (Shift+Enter untuk baris baru)"
                   disabled={isLoading}
-                  className="flex-1"
+                  className="flex-1 min-h-[40px] max-h-[200px] resize-none"
+                  rows={1}
                 />
                 <Button type="submit" disabled={isLoading || !input.trim()}>
                   {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

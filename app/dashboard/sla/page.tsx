@@ -1,5 +1,19 @@
 "use client"
 
+import { useRouter } from "next/navigation"
+import { useEffect } from "react"
+
+export default function SlaRedirectPage() {
+  const router = useRouter()
+
+  useEffect(() => {
+    router.replace("/dashboard/professional-dashboard/sla")
+  }, [router])
+
+  return null
+}
+
+/*
 import React, { useEffect, useMemo, useState, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -963,7 +977,6 @@ export default function SlaDashboardPage() {
                       <span>{col.label}</span>
                       <span className="text-xs text-muted-foreground">{sortBy === col.id ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
                     </button>
-                    {/* Resizer handle (three-line grip, matches AlertTable) */}
                     <div
                       role="separator"
                       onMouseDown={(e) => {
@@ -1176,7 +1189,6 @@ export default function SlaDashboardPage() {
           </div>
         </CardContent>
       </Card>
-      {/* Detail dialogs */}
       {selectedAlert && (
         <>
           {(() => {
@@ -1224,3 +1236,4 @@ export default function SlaDashboardPage() {
     </div>
   )
 }
+*/

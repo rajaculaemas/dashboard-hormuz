@@ -7,6 +7,39 @@ import type { AlertStatus } from "@/lib/config/stellar-cyber"
 import { getCurrentUser } from "@/lib/auth/session"
 import { hasPermission } from "@/lib/auth/password"
 
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const user = await getCurrentUser()
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const alertId = (await params).id
+
+    const alert = await prisma.alert.findUnique({
+      where: { id: alertId },
+      include: {
+        integration: true,
+      },
+    })
+
+    if (!alert) {
+      return NextResponse.json({ error: "Alert not found" }, { status: 404 })
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: alert,
+    })
+  } catch (error) {
+    console.error("[GET /api/alerts/[id]] Error:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to fetch alert" },
+      { status: 500 },
+    )
+  }
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     // Check authentication and permission
@@ -21,7 +54,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     
     const alertId = (await params).id
     const body = await request.json()
-    const { status, comments, isQRadar, closingReasonId, shouldCreateTicket, assignedTo, severity, severityBasedOnAnalysis, analysisNotes, userId } = body
+    const { status, title, comments, isQRadar, closingReasonId, shouldCreateTicket, assignedTo, severity, severityBasedOnAnalysis, analysisNotes, userId, tagsToAdd, tagsToDelete } = body
+
+    console.log(`[PATCH] Received request for alert ${alertId}:`, {
+      status,
+      title: title ? `"${title}"` : "NO TITLE CHANGE",
+      comments: comments ? `"${comments}"` : "NO COMMENT",
+      isQRadar,
+      assignedTo,
+      assignedToType: typeof assignedTo,
+      closingReasonId,
+      userId: user.id,
+      userName: user.name
+    })
 
     if (!alertId || !status) {
       return NextResponse.json({ error: "Missing required fields: id or status" }, { status: 400 })
@@ -54,7 +99,6 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     // For QRadar follow-up, mark follow_up flag in metadata so ticketing view picks it up even if status cache lags
     const updatedMetadata = {
       ...metadata,
-      ...(assignedTo && { assignee: assignedTo }),
       ...(comments && {
         comment: [
           {
@@ -66,11 +110,45 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       }),
     }
 
-    if (isQRadar && status === "In Progress") {
+    // Handle assignee based on integration type
+    const integrationSource = alert.integration?.source || ""
+    const integrationName = alert.integration?.name || ""
+
+    if (integrationSource === "qradar" || integrationName.includes("QRadar") || isQRadar) {
+      // QRadar: preserve assigned_to from QRadar API, only update on "In Progress" status
+      const qradarMeta = metadata.qradar || {}
+      
+      // Always preserve the existing assigned_to from QRadar
       updatedMetadata.qradar = {
-        ...(metadata.qradar || {}),
-        follow_up: true,
-        assigned_to: assignedTo || metadata.qradar?.assigned_to,
+        ...qradarMeta,
+      }
+      
+      // Only update assigned_to when transitioning to "In Progress" (FOLLOW_UP status)
+      if (status === "In Progress" && assignedTo) {
+        // Use assignedTo as the new assigned_to value
+        updatedMetadata.qradar.assigned_to = assignedTo
+        updatedMetadata.qradar.follow_up = true
+      }
+    } else if (integrationSource === "stellar-cyber" || integrationName.includes("Stellar")) {
+      // Stellar Cyber: store assignee in metadata.assignee (local only, not sent to API)
+      if (assignedTo?.trim()) {
+        updatedMetadata.assignee = assignedTo
+        console.log(`[PATCH] Stellar Cyber assignee update:`, {
+          assignedTo,
+          assignedToType: typeof assignedTo,
+          storedAsAssignee: updatedMetadata.assignee
+        })
+      }
+    } else if (integrationSource === "socfortress" || integrationName.includes("SOCFortress") || integrationName.includes("Copilot")) {
+      // Socfortress/Copilot: store assignee in metadata.socfortress or metadata.assigned_to
+      if (assignedTo?.trim()) {
+        updatedMetadata.socfortress = updatedMetadata.socfortress || {}
+        updatedMetadata.socfortress.assigned_to = assignedTo
+      }
+    } else {
+      // Fallback for unknown integrations: store in metadata.assignee
+      if (assignedTo?.trim()) {
+        updatedMetadata.assignee = assignedTo
       }
     }
 
@@ -83,6 +161,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       where: { id: alertId },
       data: {
         status: status as AlertStatus,
+        ...(title?.trim() && { title: title.trim() }),
         ...(severity && { severity }),
         ...(severityBasedOnAnalysis && { severityBasedOnAnalysis }),
         ...(analysisNotes && { analysisNotes }),
@@ -138,6 +217,19 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       })
     }
 
+    if (title?.trim() && title.trim() !== alert.title) {
+      timelineEvents.push({
+        alertId,
+        eventType: "title_change",
+        description: `Alert title updated`,
+        oldValue: alert.title || "",
+        newValue: title.trim(),
+        changedBy: user.name || user.email || "System",
+        changedByUserId: user.id,
+        timestamp: new Date(currentTimestampIso),
+      })
+    }
+
     if (timelineEvents.length > 0) {
       await prisma.alertTimeline.createMany({ data: timelineEvents })
     }
@@ -167,117 +259,118 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       }
     }
 
-    // Jika alert berasal dari QRadar
+    // QRadar alert status update - UPDATE QRADAR OFFENSE
     if (isQRadar && alert.integration.source === "qradar" && (alert.metadata as any)?.qradar?.id) {
       try {
-        const creds = alert.integration.credentials as any
-        const qradarClient = new QRadarClient({
-          host: creds.host,
-          api_key: creds.api_key,
-        })
+        const qradarMeta = (alert.metadata as any)?.qradar || {}
+        const offenseId = qradarMeta.id
+        const domainId = qradarMeta.domain_id
 
-        // Fetch current offense status from QRadar to check if already closed
-        const currentOffense = await qradarClient.getOffenseDetails((alert.metadata as any).qradar.id)
-        console.log(`[v0] Current QRadar offense status: ${currentOffense.status}`)
-
-        // Only update if offense is not already closed
-        if (currentOffense.status === "CLOSED") {
-          console.log(`[v0] Offense ${(alert.metadata as any).qradar.id} is already closed in QRadar, skipping update`)
-        } else {
-          // Map status ke QRadar status
-          let qradarStatus: "OPEN" | "FOLLOW_UP" | "CLOSED" = "OPEN"
-          if (status === "In Progress") {
-            qradarStatus = "FOLLOW_UP"
-          } else if (status === "Closed") {
-            qradarStatus = "CLOSED"
-          }
-
-          const offenseId = (alert.metadata as any).qradar.id
-          const primaryAssignee = assignedTo || creds.username
-
-          const attemptUpdate = async (assignee?: string) => {
-            return qradarClient.updateOffenseStatus(offenseId, qradarStatus, assignee, closingReasonId)
-          }
-
-          try {
-            await attemptUpdate(primaryAssignee)
-          } catch (err: any) {
-            const message = err?.message || ""
-            const isAccessError = message.includes("does not have access") || message.includes("409")
-
-            if (isAccessError) {
-              console.warn(`[v0] QRadar offense ${offenseId} update failed for assignee '${primaryAssignee}', retrying without assignee`)
-              try {
-                await attemptUpdate(undefined)
-              } catch (err2) {
-                console.error("Error updating alert status in QRadar (fallback):", err2)
-              }
-            } else {
-              console.error("Error updating alert status in QRadar:", err)
-            }
-          }
-
-          console.log(`[v0] Updated QRadar offense ${offenseId} to status ${qradarStatus}`)
+        // Parse credentials from integration
+        let qradarCreds = alert.integration.credentials as any
+        if (typeof qradarCreds === "string") {
+          qradarCreds = JSON.parse(qradarCreds)
         }
 
-        // When status changes to FOLLOW_UP, upsert QRadarOffense record so it shows in ticketing menu
-        if (status === "In Progress") {
+        const qHost = qradarCreds.host
+        const apiKey = qradarCreds.api_key
+
+        if (!qHost || !apiKey) {
+          throw new Error("QRadar credentials missing (host or api_key)")
+        }
+
+        // Map app status to QRadar status
+        const statusMap: Record<string, string> = {
+          "New": "OPEN",
+          "In Progress": "FOLLOW_UP",
+          "Closed": "CLOSED",
+          "Ignored": "CLOSED",
+        }
+
+        const qradarStatus = statusMap[status] || "OPEN"
+
+        console.log(`[v0] QRadar: Updating offense ${offenseId} (domain ${domainId}) to status: ${qradarStatus}`)
+
+        const qradarClient = new QRadarClient({ host: qHost, api_key: apiKey, domain_id: domainId })
+        await qradarClient.updateOffenseStatus(offenseId, qradarStatus as "OPEN" | "FOLLOW_UP" | "CLOSED", assignedTo, closingReasonId)
+
+        console.log(`[v0] QRadar: Successfully updated offense ${offenseId} to ${qradarStatus}`)
+
+        // Add comment/note to QRadar if provided
+        if (comments && comments.trim()) {
           try {
-            const upsertedOffense = await prisma.qRadarOffense.upsert({
-              where: { externalId: (alert.metadata as any).qradar.id },
-              update: {
-                status: "FOLLOW_UP",
-                lastUpdatedTime: new Date(),
-              },
-              create: {
-                externalId: (alert.metadata as any).qradar.id,
-                title: alert.title || "QRadar Offense",
-                description: alert.description,
-                severity: alert.severity || "Medium",
-                status: "FOLLOW_UP",
-                integrationId: alert.integrationId,
-                startTime: new Date(),
-                metadata: alert.metadata || {},
+            const noteText = `[${user.name || user.email || "System"}] ${comments}`
+            console.log(`[v0] QRadar: Adding note to offense ${offenseId}:`, noteText)
+            
+            const noteResponse = await qradarClient.createNote(offenseId, noteText)
+            console.log(`[v0] QRadar: Created note ${noteResponse.id} on offense ${offenseId}`)
+
+            const localNote = {
+              id: noteResponse.id,
+              create_time: noteResponse.create_time,
+              username: noteResponse.username || user.name || user.email || "System",
+              note_text: noteResponse.note_text || noteText,
+            }
+
+            // Persist QRadar notes locally on alert metadata for quick UI access.
+            const latestAlert = await prisma.alert.findUnique({
+              where: { id: alertId },
+              select: { metadata: true },
+            })
+
+            const latestAlertMeta = (latestAlert?.metadata as any) || {}
+            const existingAlertNotes = Array.isArray(latestAlertMeta?.qradar?.notes)
+              ? latestAlertMeta.qradar.notes
+              : []
+
+            await prisma.alert.update({
+              where: { id: alertId },
+              data: {
+                metadata: {
+                  ...latestAlertMeta,
+                  qradar: {
+                    ...(latestAlertMeta.qradar || {}),
+                    notes: [...existingAlertNotes, localNote],
+                    notesLastSyncedAt: new Date().toISOString(),
+                  },
+                },
               },
             })
 
-            console.log(`[v0] Upserted QRadar offense ${(alert.metadata as any).qradar.id} to FOLLOW_UP status in database`)
+            // Persist QRadar notes locally on offense metadata as source-of-truth cache.
+            const existingOffense = await prisma.qRadarOffense.findFirst({
+              where: { externalId: Number(offenseId), integrationId: alert.integrationId },
+              select: { id: true, metadata: true },
+            })
 
-            // Also upsert QRadarTicket so it appears in the ticketing menu
-            try {
-              const ticketNumber = `QRADAR-${(alert.metadata as any).qradar.id}`
-              await prisma.qRadarTicket.upsert({
-                where: { qradarOffenseId: upsertedOffense.id },
-                update: {
-                  status: "OPEN",
-                  description: alert.description || alert.title,
-                  updatedAt: new Date(),
-                },
-                create: {
-                  ticketNumber: ticketNumber,
-                  offenseId: (alert.metadata as any).qradar.id,
-                  description: alert.description || alert.title,
-                  status: "OPEN",
-                  qradarOffenseId: upsertedOffense.id,
+            if (existingOffense) {
+              const offenseMeta = (existingOffense.metadata as any) || {}
+              const existingOffenseNotes = Array.isArray(offenseMeta.notes) ? offenseMeta.notes : []
+
+              await prisma.qRadarOffense.update({
+                where: { id: existingOffense.id },
+                data: {
+                  metadata: {
+                    ...offenseMeta,
+                    notes: [...existingOffenseNotes, localNote],
+                    notesLastSyncedAt: new Date().toISOString(),
+                  },
                 },
               })
-              console.log(`[v0] Upserted QRadar ticket for offense ${(alert.metadata as any).qradar.id}`)
-            } catch (ticketError) {
-              console.error("Error upserting QRadar ticket:", ticketError)
-              // Continue even if ticket upsert fails
             }
-          } catch (dbError) {
-            console.error("Error upserting QRadar offense:", dbError)
-            // Continue even if database update fails
+          } catch (noteError) {
+            console.warn(`[v0] QRadar: Failed to create note on offense ${offenseId}:`, noteError)
+            // Don't fail the whole update if note creation fails
           }
         }
-      } catch (error) {
-        console.error("Error updating alert status in QRadar:", error)
-        // Lanjutkan meskipun gagal update di QRadar
-      }
 
-      // When status changes to FOLLOW_UP, the offense is already updated in QRadar above.
-      // No separate ticket creation needed — offense with FOLLOW_UP status is shown in ticketing menu.
+        if (closingReasonId) {
+          console.log(`[v0] QRadar: Offense ${offenseId} closed with reason ID: ${closingReasonId}`)
+        }
+      } catch (error) {
+        console.error("[v0] Error updating QRadar offense:", error)
+        // Don't fail the whole request if QRadar update fails - local database is already updated
+      }
     } else if (!isQRadar && alert.integration.source === "stellar-cyber" && alert.externalId) {
       // Jika alert berasal dari Stellar Cyber, update juga di sana
       try {
@@ -350,6 +443,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
             comments: comments,
             assignedTo: assignedTo,
             severity: severity,
+            tagsToAdd: tagsToAdd,
+            tagsToDelete: tagsToDelete,
           }
         )
         

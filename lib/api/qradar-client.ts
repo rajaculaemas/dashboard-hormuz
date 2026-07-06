@@ -29,13 +29,33 @@ export class QRadarClient {
   private baseUrl: string
   private authToken: string
   private httpsAgent: https.Agent
+  private domainId?: number
 
-  constructor(baseUrl: string, authToken: string) {
-    this.baseUrl = baseUrl
-    this.authToken = authToken
+  constructor(config: { host: string; api_key: string; domain_id?: number } | string, authToken?: string, domainId?: number) {
+    // Support both object and separate parameter initialization
+    if (typeof config === "object") {
+      this.baseUrl = config.host
+      this.authToken = config.api_key
+      this.domainId = config.domain_id
+    } else {
+      this.baseUrl = config
+      this.authToken = authToken || ""
+      this.domainId = domainId
+    }
     this.httpsAgent = new https.Agent({
       rejectUnauthorized: false,
     })
+  }
+
+  private buildHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      SEC: this.authToken,
+      Accept: "application/json",
+    }
+    if (this.domainId !== undefined) {
+      headers["X-QRadar-Domain-Id"] = String(this.domainId)
+    }
+    return headers
   }
 
   async getOffenses(params?: {
@@ -45,10 +65,7 @@ export class QRadarClient {
   }): Promise<QRadarOffenseResponse[]> {
     try {
       const response = await axios.get(`${this.baseUrl}/api/siem/offenses`, {
-        headers: {
-          SEC: this.authToken,
-          Accept: "application/json",
-        },
+        headers: this.buildHeaders(),
         params,
         httpsAgent: this.httpsAgent,
       })
@@ -62,10 +79,7 @@ export class QRadarClient {
   async getOffenseDetails(offenseId: number): Promise<QRadarOffenseResponse> {
     try {
       const response = await axios.get(`${this.baseUrl}/api/siem/offenses/${offenseId}`, {
-        headers: {
-          SEC: this.authToken,
-          Accept: "application/json",
-        },
+        headers: this.buildHeaders(),
         httpsAgent: this.httpsAgent,
       })
       return response.data
@@ -78,10 +92,7 @@ export class QRadarClient {
   async getOffenseEvents(offenseId: number): Promise<QRadarEventResponse[]> {
     try {
       const response = await axios.get(`${this.baseUrl}/api/siem/offenses/${offenseId}/events`, {
-        headers: {
-          SEC: this.authToken,
-          Accept: "application/json",
-        },
+        headers: this.buildHeaders(),
         httpsAgent: this.httpsAgent,
       })
       return response.data
@@ -98,7 +109,7 @@ export class QRadarClient {
         { status },
         {
           headers: {
-            SEC: this.authToken,
+            ...this.buildHeaders(),
             "Content-Type": "application/json",
           },
           httpsAgent: this.httpsAgent,
@@ -118,7 +129,7 @@ export class QRadarClient {
         { description },
         {
           headers: {
-            SEC: this.authToken,
+            ...this.buildHeaders(),
             "Content-Type": "application/json",
           },
           httpsAgent: this.httpsAgent,

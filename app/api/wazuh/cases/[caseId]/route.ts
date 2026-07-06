@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPermission } from '@/lib/auth/password';
 
 // GET case details
 export async function GET(
   request: NextRequest,
-  { params }: { params: { caseId: string } }
+  { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
-    const { caseId } = params;
+    const { caseId } = await params;
 
     const wazuhCase = await prisma.wazuhCase.findUnique({
       where: { id: caseId },
@@ -52,7 +52,7 @@ export async function GET(
 // PATCH - Update case status/assignee
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { caseId: string } }
+  { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
     // Check authentication and permission
@@ -65,7 +65,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Forbidden: You don't have permission to update cases" }, { status: 403 });
     }
     
-    const { caseId } = params;
+    const { caseId } = await params;
     const body = await request.json();
     const { status, assigneeId, description, notes } = body;
 
@@ -123,10 +123,24 @@ export async function PATCH(
 // DELETE case
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { caseId: string } }
+  { params }: { params: Promise<{ caseId: string }> }
 ) {
   try {
-    const { caseId } = params;
+    // Check authentication and permission
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    
+    // Only administrators can delete cases
+    if (user.role !== 'administrator') {
+      return NextResponse.json(
+        { error: "Forbidden: Only administrators can delete cases" },
+        { status: 403 }
+      );
+    }
+    
+    const { caseId } = await params;
 
     const wazuhCase = await prisma.wazuhCase.findUnique({
       where: { id: caseId },

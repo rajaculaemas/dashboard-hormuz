@@ -64,7 +64,7 @@ export class WazuhClient {
     const indexRaw = options?.indexPattern || this.elasticsearch_index
     const indexPatterns = String(indexRaw).split(',').map((s) => s.trim()).filter(Boolean)
     const pageSize = 500
-    const maxAlerts = options?.limit || 10000
+    const maxAlerts = options?.limit || 1000
     const since = sinceISO || new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
     const nowISO = new Date().toISOString()
 
@@ -247,6 +247,215 @@ export class WazuhClient {
     }
 
     return Array.from(alertsMap.values())
+  }
+
+  /**
+   * Free-text log search for the SOC chat assistant.
+   * No mandatory syslog_level/action/event_log_name filters — searches all event types.
+   */
+  async searchRawLogs(params: {
+    query?: string          // free-text / field:value (query_string syntax)
+    srcIp?: string
+    dstIp?: string
+    agentName?: string
+    ruleId?: string
+    indexPattern?: string   // comma-separated or single pattern
+    since?: string          // ISO timestamp (default: 24h ago)
+    until?: string          // ISO timestamp (default: now)
+    limit?: number
+  }): Promise<any[]> {
+    const {
+      query,
+      srcIp,
+      dstIp,
+      agentName,
+      ruleId,
+      indexPattern,
+      since,
+      until,
+      limit = 20,
+    } = params
+
+    const sinceISO = since || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const untilISO = until || new Date().toISOString()
+
+    // Use provided index or the integration's configured index
+    const patterns = indexPattern
+      ? indexPattern.split(',').map((s) => s.trim()).filter(Boolean)
+      : [this.elasticsearch_index]
+
+    const results: any[] = []
+
+    for (const pattern of patterns) {
+      if (results.length >= limit) break
+
+      const url = `${this.elasticsearch_url}/${pattern}/_search`
+
+      // Build bool query
+      const mustClauses: any[] = []
+      const filterClauses: any[] = [
+        {
+          bool: {
+            should: [
+              { range: { timestamp:     { gte: sinceISO, lte: untilISO, format: "epoch_millis||strict_date_optional_time" } } },
+              { range: { timestamp_utc: { gte: sinceISO, lte: untilISO, format: "epoch_millis||strict_date_optional_time" } } },
+              { range: { "@timestamp":  { gte: sinceISO, lte: untilISO, format: "epoch_millis||strict_date_optional_time" } } },
+              { range: { msg_timestamp: { gte: sinceISO, lte: untilISO, format: "epoch_millis||strict_date_optional_time" } } },
+            ],
+            minimum_should_match: 1,
+          },
+        },
+      ]
+
+      // Free-text query — strategy depends on whether user specified a field or not.
+      if (query) {
+        const hasFieldSyntax = /\w[\w.]+\s*:/.test(query)  // e.g. "syslog_description:DNS*"
+
+        if (hasFieldSyntax) {
+          // Explicit field:value — pass directly to query_string
+          mustClauses.push({
+            query_string: {
+              query,
+              analyze_wildcard: true,
+              lenient: true,
+            },
+          })
+        } else {
+          // Strip leading/trailing wildcards that the LLM sometimes adds (e.g. "*DNS Command*")
+          // phrase_prefix and phrase queries do not support wildcard chars — they break tokenisation.
+          const cleanQuery = query.replace(/[*?]/g, '').trim()
+
+          // Description fields only — prevents cross-field false positives (e.g. Fortinet
+          // events where service:"DNS" is in one field and "Command" happens to be in another).
+          const descriptionFields = [
+            "syslog_description", "rule_description", "rule.description",
+            "logdesc", "message", "event_name",
+            "alert_indicator", "alert_signature",   // Palo Alto threat/spyware events
+          ]
+          const isMultiWord = cleanQuery.includes(' ')
+
+          if (isMultiWord) {
+            // Extract meaningful words (> 2 chars) in order, strip stop chars like hyphens.
+            // "DNS Command-and-Control" → ["DNS","Command","Control"]
+            const words = cleanQuery.split(/[^a-zA-Z0-9]+/).filter(w => w.length > 2)
+            // Ordered wildcard: *DNS*Command*Control* — requires words to appear in order
+            // in the SAME raw field value (used for keyword/non-analyzed fields).
+            const orderedWildcard = `*${words.join('*')}*`
+
+            mustClauses.push({
+              bool: {
+                should: [
+                  // 1. Phrase prefix on analyzed (text) fields — tokens must appear
+                  //    as a consecutive phrase in ONE field. Prevents cross-field matches.
+                  {
+                    multi_match: {
+                      query: cleanQuery,
+                      type: "phrase_prefix",
+                      fields: descriptionFields,
+                      lenient: true,
+                    },
+                  },
+                  // 2. Ordered wildcard on .keyword sub-fields — handles non-analyzed fields.
+                  //    "*DNS*Command*Control*" matches "DNS Command-and-Control..." but NOT
+                  //    "Command...Control...DNS" or "DNS query to domain" alone.
+                  {
+                    query_string: {
+                      query: orderedWildcard,
+                      fields: descriptionFields.map(f => `${f}.keyword`),
+                      analyze_wildcard: true,
+                      lenient: true,
+                    },
+                  },
+                ],
+                minimum_should_match: 1,
+              },
+            })
+          } else {
+            // Single word: safe to use wildcard across all fields
+            mustClauses.push({
+              query_string: {
+                query: `*${cleanQuery}*`,
+                fields: ['*'],
+                analyze_wildcard: true,
+                lenient: true,
+              },
+            })
+          }
+        }
+        console.log(`[WazuhClient.searchRawLogs] query="${query}" cleanQuery="${query.replace(/[*?]/g,'').trim()}" hasFieldSyntax=${hasFieldSyntax}`)
+      }
+
+      if (srcIp)     filterClauses.push({ bool: { should: [{ term: { src_ip: srcIp } }, { term: { source: srcIp } }], minimum_should_match: 1 } })
+      if (dstIp)     filterClauses.push({ bool: { should: [{ term: { dst_ip: dstIp } }, { term: { destination: dstIp } }], minimum_should_match: 1 } })
+      if (agentName) filterClauses.push({ bool: { should: [{ match: { agent_name: agentName } }, { match: { "agent.name": agentName } }], minimum_should_match: 1 } })
+      if (ruleId)    filterClauses.push({ bool: { should: [{ term: { rule_id: ruleId } }, { term: { "rule.id": ruleId } }], minimum_should_match: 1 } })
+
+      const body = {
+        size: Math.min(limit - results.length, 50),
+        sort: [{ timestamp: { order: "desc", missing: "_last" } }],
+        query: {
+          bool: {
+            must: mustClauses,
+            filter: filterClauses,
+          },
+        },
+      }
+
+      const auth = 'Basic ' + Buffer.from(`${this.elasticsearch_username}:${this.elasticsearch_password}`).toString('base64')
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: auth },
+          body: JSON.stringify(body),
+          agent: httpsAgent as any,
+          timeout: 30000,
+        } as any)
+
+        if (!res.ok) {
+          const t = await res.text().catch(() => '')
+          console.error(`[WazuhClient.searchRawLogs] ${pattern}: ${res.status} ${t.slice(0, 200)}`)
+          continue
+        }
+
+        const data = (await res.json()) as any
+        const hits: any[] = data?.hits?.hits || []
+
+        for (const hit of hits) {
+          const src = hit._source || {}
+          results.push({
+            id: hit._id,
+            index: hit._index,
+            timestamp: src.timestamp || src.timestamp_utc || src['@timestamp'] || src.msg_timestamp,
+            rule_id: src.rule_id || src.rule?.id,
+            rule_description: src.rule_description || src.rule?.description || src.logdesc || src.syslog_description,
+            agent_name: src.agent_name || src.agent?.name,
+            agent_ip: src.agent_ip || src.agent?.ip,
+            src_ip: src.src_ip || src.source,
+            dst_ip: src.dst_ip || src.destination,
+            src_port: src.src_port,
+            dst_port: src.dst_port,
+            severity: src.rule_level || src.severity,
+            syslog_level: src.syslog_level,
+            message: src.syslog_description || src.rule_description || src.logdesc,
+            // Palo Alto threat/spyware fields
+            vendor_event_action: src.vendor_event_action,   // alert, sinkhole, drop, dropped, block-ip, reset-client, reset-server
+            alert_indicator: src.alert_indicator,           // domain or IP that triggered the alert
+            alert_signature: src.alert_signature,           // e.g. "Tunneling:xpmrlba.com(109001001)"
+            alert_category: src.alert_category,             // e.g. ["dns-c2", "any"]
+            alert_definitions_version: src.alert_definitions_version,
+            vendor_alert_severity: src.vendor_alert_severity,
+            application_name: src.application_name,
+            pan_log_subtype: src.pan_log_subtype,           // spyware, vulnerability, wildfire, etc.
+            _raw: src,
+          })
+        }
+      } catch (err: any) {
+        console.error(`[WazuhClient.searchRawLogs] ${pattern}: ${err.message}`)
+      }
+    }
+
+    return results.slice(0, limit)
   }
 }
 

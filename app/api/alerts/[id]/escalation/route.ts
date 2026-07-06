@@ -8,10 +8,10 @@ import { getActiveEscalation, getEscalationHistory } from "@/lib/services/alert-
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const alertId = (await params).id
+    const { id: alertId } = await params
 
     if (!alertId) {
       return NextResponse.json({ error: "Alert ID required" }, { status: 400 })
@@ -25,6 +25,7 @@ export async function GET(
 
     return NextResponse.json({
       success: true,
+      escalation: activeEscalation,
       active: activeEscalation,
       history,
     })

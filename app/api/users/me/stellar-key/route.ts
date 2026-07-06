@@ -1,10 +1,11 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth/session"
 import { setStellarApiKey, deleteStellarApiKey, getUserStellarApiKey } from "@/lib/api/user-stellar-credentials"
+import prisma from "@/lib/prisma"
 
 /**
  * GET /api/users/me/stellar-key
- * Get current user's Stellar Cyber API key status (does not return the actual key)
+ * Get current user's Stellar Cyber API key status (checks both global and per-host)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -13,12 +14,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const apiKey = await getUserStellarApiKey(user.userId)
-    const hasApiKey = !!apiKey
+    // Check global API key (legacy)
+    const globalKey = await getUserStellarApiKey(user.userId)
+    const hasGlobalKey = !!globalKey
+
+    // Check per-host API keys (new approach)
+    const hostCredentials = await prisma.userStellarCyberHostCredential.findMany({
+      where: { userId: user.userId },
+      select: { host: true, apiKey: true },
+    })
+
+    const hasHostKeys = hostCredentials.length > 0 && hostCredentials.some(c => c.apiKey && c.apiKey.trim() !== "")
+    const hasApiKey = hasGlobalKey || hasHostKeys
 
     return NextResponse.json({
       success: true,
       hasApiKey,
+      hasGlobalKey,
+      hasHostKeys,
+      hostCount: hostCredentials.length,
       message: hasApiKey ? "Stellar API key is configured" : "Stellar API key is not configured",
     })
   } catch (error) {

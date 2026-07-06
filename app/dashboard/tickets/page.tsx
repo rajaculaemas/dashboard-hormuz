@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/lib/stores/auth-store"
 import { hasPermission } from "@/lib/auth/password"
@@ -10,6 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   AlertCircle,
   Clock,
@@ -24,6 +26,9 @@ import {
   Timer,
   AlertTriangle,
   Edit,
+  ChevronDown,
+  Trash,
+  Download,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { CaseDetailDialog } from "@/components/case/case-detail-dialog"
@@ -33,6 +38,7 @@ import { formatDistanceToNow } from "date-fns"
 import { format } from "date-fns"
 import { DateRangePicker } from "@/components/ui/date-range-picker"
 import { Switch } from "@/components/ui/switch"
+import { exportTicketsToExcel } from "@/lib/utils/tickets-excel-export"
 
 interface Integration {
   id: string
@@ -110,6 +116,7 @@ export default function TicketsPage() {
   })
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   // Helper function to get assignee name from ID or use existing name
   const getAssigneeName = (assigneeId: string | null, assigneeName: string | null): string => {
@@ -127,7 +134,8 @@ export default function TicketsPage() {
     return "Unassigned"
   }
   const [refreshing, setRefreshing] = useState(false)
-  const [selectedIntegration, setSelectedIntegration] = useState<string>("all")
+  const [integrationFilter, setIntegrationFilter] = useState<string[]>(["all"])
+  const [integrationPopoverOpen, setIntegrationPopoverOpen] = useState(false)
   const [timeRange, setTimeRange] = useState("7d")
   const [useAbsoluteDate, setUseAbsoluteDate] = useState(false)
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date } | undefined>(undefined)
@@ -142,6 +150,10 @@ export default function TicketsPage() {
   const [pageSize, setPageSize] = useState(10)
   const [totalPages, setTotalPages] = useState(1)
   const [accessibleIntegrationIds, setAccessibleIntegrationIds] = useState<string[]>([])
+  const [sortBy, setSortBy] = useState<string>("createdAt")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const resizingRef = useRef<{ colId: string; startX: number; startWidth: number } | null>(null)
   const { toast } = useToast()
   const user = useAuthStore((state) => state.user)
 
@@ -163,6 +175,50 @@ export default function TicketsPage() {
     }
     const parsed = Date.parse(value)
     return Number.isNaN(parsed) ? NaN : parsed
+  }
+
+  // Integration filter handlers
+  const isAllIntegrations = integrationFilter.includes("all")
+  const selectedCount = integrationFilter.filter(f => f !== "all").length
+
+  const handleSelectAllIntegrations = (checked: boolean) => {
+    if (checked) {
+      setIntegrationFilter(["all"])
+    } else {
+      setIntegrationFilter([])
+    }
+  }
+
+  const handleSelectIntegration = (integrationId: string, checked: boolean) => {
+    // If "all" is selected, first remove it when selecting individual integrations
+    let newFilters = integrationFilter.filter(f => f !== "all")
+    
+    if (checked) {
+      newFilters.push(integrationId)
+    } else {
+      newFilters = newFilters.filter(f => f !== integrationId)
+    }
+    
+    // If all individual integrations are selected, replace with "all"
+    if (newFilters.length === integrations.length) {
+      setIntegrationFilter(["all"])
+    } else {
+      setIntegrationFilter(newFilters)
+    }
+  }
+
+  const getIntegrationDisplayLabel = () => {
+    if (isAllIntegrations) {
+      return "All Integrations"
+    }
+    if (selectedCount === 0) {
+      return "No integration selected"
+    }
+    if (selectedCount === 1) {
+      const selected = integrations.find(i => integrationFilter.includes(i.id))
+      return selected?.name || "1 Integration"
+    }
+    return `${selectedCount} Integrations`
   }
 
   const extractAlertTimestamp = (rawAlert: any): number => {
@@ -201,33 +257,27 @@ export default function TicketsPage() {
   }
 
   const computeQRadarMttrMinutes = (qradarCase: any): number | null => {
-    // For QRadar: MTTR = Case Created - Alert Created
-    // - Alert Created = createdAt (mapped from alert.timestamp in API)
-    // - Case Created = updatedAt (mapped from alert.updatedAt in API)
-    
-    console.log("computeQRadarMttrMinutes input:", { 
-      createdAt: qradarCase?.createdAt,
-      updatedAt: qradarCase?.updatedAt
-    })
-    
-    // Alert created time - when the alert/offense first appeared (API maps a.timestamp to createdAt)
-    const alertCreatedMs = toMillis(qradarCase?.createdAt)
-    
-    // Case created time - when alert was marked as follow-up (API maps a.updatedAt to updatedAt)
-    const caseCreatedMs = toMillis(qradarCase?.updatedAt)
-    
-    console.log("Converted timestamps:", { alertCreatedMs, caseCreatedMs })
-    
-    // Both timestamps must be valid
-    if (!Number.isFinite(alertCreatedMs) || !Number.isFinite(caseCreatedMs)) {
-      console.log("Invalid timestamps, returning null")
-      return null
+    // For QRadar cases: MTTR = Case Created - Oldest Alert Created
+    // If mttrMinutes is already provided from API, use it
+    if (qradarCase.mttrMinutes !== undefined && qradarCase.mttrMinutes !== null) {
+      return qradarCase.mttrMinutes;
     }
-    
-    // MTTR = time from alert created to case created (when marked as follow-up)
-    const diffMinutes = Math.max(0, Math.round((caseCreatedMs - alertCreatedMs) / 60000))
-    console.log("Computed MTTR:", diffMinutes, "minutes")
-    return diffMinutes
+
+    // Fallback calculation if not provided by API
+    if (qradarCase.alerts && qradarCase.alerts.length > 0) {
+      const alertCreatedTimes = qradarCase.alerts
+        .filter((ca: any) => ca.alert && ca.alert.createdAt)
+        .map((ca: any) => new Date(ca.alert.createdAt).getTime());
+      
+      if (alertCreatedTimes.length > 0) {
+        const oldestAlertTime = Math.min(...alertCreatedTimes);
+        const caseCreatedTime = new Date(qradarCase.createdAt).getTime();
+        const diffMinutes = Math.max(0, Math.round((caseCreatedTime - oldestAlertTime) / 60000));
+        return diffMinutes;
+      }
+    }
+
+    return null;
   }
 
   const computeStellarMttrMinutes = (stellarCase: any): number | null => {
@@ -311,9 +361,9 @@ export default function TicketsPage() {
 
       if (data.success) {
         setIntegrations(data.data)
-        // Auto-select first integration if none selected
-        if (!selectedIntegration && data.data.length > 0) {
-          setSelectedIntegration(data.data[0].id)
+        // Auto-select "all" if no integrations are selected
+        if (integrationFilter.length === 0 && data.data.length > 0) {
+          setIntegrationFilter(["all"])
         }
       }
     } catch (error) {
@@ -328,13 +378,18 @@ export default function TicketsPage() {
 
   // Fetch cases
   const fetchCases = async () => {
-    if (!selectedIntegration) return
+    if (!integrationFilter || integrationFilter.length === 0) return
 
     try {
-      // Handle "all" integrations
-      if (selectedIntegration === "all") {
-        console.log("Fetching cases from all integrations")
-        console.log("Available integrations:", integrations.map(i => ({ id: i.id, name: i.name, source: i.source })))
+      // Determine which integrations to fetch from
+      const isAllIntegrations = integrationFilter.includes("all")
+      const integrationsToFetch = isAllIntegrations 
+        ? integrations 
+        : integrations.filter(i => integrationFilter.includes(i.id))
+
+      // Handle multiple integrations
+      if (integrationsToFetch.length > 0) {
+        console.log("Fetching cases from integrations:", integrationsToFetch.map(i => ({ id: i.id, name: i.name, source: i.source })))
         
         const allCases: Case[] = []
         let totalStats = {
@@ -349,7 +404,7 @@ export default function TicketsPage() {
         let mttrCount = 0
 
         // Fetch from each integration
-        for (const integration of integrations) {
+        for (const integration of integrationsToFetch) {
           try {
             console.log(`Processing integration: ${integration.name} (${integration.id}) - source: ${integration.source}`)
             let data
@@ -367,7 +422,11 @@ export default function TicketsPage() {
               console.log(`Wazuh response for ${integration.name}:`, data)
 
               if (data.cases) {
-                const transformedCases = data.cases.map((wazuhCase: any) => {
+                // Filter cases to only include those belonging to this specific integration
+                const filteredCases = data.cases.filter((wazuhCase: any) => wazuhCase.integrationId === integration.id)
+                console.log(`[Tickets] Wazuh cases for ${integration.name}: ${filteredCases.length} (of ${data.cases.length} total Wazuh cases)`)
+                
+                const transformedCases = filteredCases.map((wazuhCase: any) => {
                   const mttrMinutes = computeWazuhMttrMinutes(wazuhCase)
                   if (mttrMinutes !== null && mttrMinutes !== undefined) {
                     mttrSum += mttrMinutes
@@ -378,7 +437,7 @@ export default function TicketsPage() {
                   id: wazuhCase.id,
                   externalId: wazuhCase.caseNumber,
                   name: wazuhCase.title || `Case ${wazuhCase.caseNumber}`,
-                  status: wazuhCase.status === "open" ? "New" : wazuhCase.status === "in_progress" ? "In Progress" : "Resolved",
+                  status: wazuhCase.status, // Backend already normalizes status
                   severity: wazuhCase.severity || null,
                   assignee: wazuhCase.assignee?.name || wazuhCase.assignee?.email || null,
                   assigneeName: wazuhCase.assignee?.name || null,
@@ -388,13 +447,77 @@ export default function TicketsPage() {
                   score: null,
                   size: wazuhCase.alertCount,
                   integration: {
-                    id: integration.id,
+                    id: wazuhCase.integrationId,
                     name: integration.name,
                     source: "wazuh",
                   },
                   alerts: wazuhCase.alerts || [],
                   mttrMinutes,
                 }
+                })
+                
+                // Apply front-end filtering for status and severity as additional safety
+                let filteredData = transformedCases
+                if (statusFilter && statusFilter !== "all") {
+                  filteredData = filteredData.filter((c: any) => c.status === statusFilter)
+                }
+                if (severityFilter && severityFilter !== "all") {
+                  filteredData = filteredData.filter((c: any) => c.severity === severityFilter)
+                }
+                
+                allCases.push(...filteredData)
+                totalStats.total += filteredData.length
+                totalStats.open += filteredData.filter((c: any) => c.status === "New").length
+                totalStats.inProgress += filteredData.filter((c: any) => c.status === "In Progress").length
+                totalStats.resolved += filteredData.filter((c: any) => c.status === "Resolved").length
+                totalStats.critical += filteredData.filter((c: any) => c.severity === "Critical").length
+              }
+            } else if (integration.source === "qradar" || integration.name?.toLowerCase().includes("qradar")) {
+              console.log(`Fetching QRadar cases from: ${integration.name}`)
+              const params = new URLSearchParams({
+                ...(useAbsoluteDate && dateRange && { from_date: formatLocalDate(dateRange.from) }),
+                ...(useAbsoluteDate && dateRange && { to_date: formatLocalDate(dateRange.to) }),
+                ...(!useAbsoluteDate && { time_range: timeRange }),
+                ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
+                ...(severityFilter && severityFilter !== "all" && { severity: severityFilter }),
+              })
+              const response = await fetch(`/api/qradar/cases?${params}`)
+              data = await response.json()
+              console.log(`QRadar response for ${integration.name}:`, data)
+
+              if (data.cases) {
+                // Filter cases to only include those belonging to this specific integration
+                const filteredCases = data.cases.filter((qradarCase: any) => qradarCase.integrationId === integration.id)
+                console.log(`[Tickets] QRadar cases for ${integration.name}: ${filteredCases.length} (of ${data.cases.length} total QRadar cases)`)
+                
+                const transformedCases = filteredCases.map((qradarCase: any) => {
+                  const mttrMinutes = computeQRadarMttrMinutes(qradarCase)
+                  if (mttrMinutes !== null && mttrMinutes !== undefined) {
+                    mttrSum += mttrMinutes
+                    mttrCount += 1
+                  }
+
+                  return {
+                    id: qradarCase.id,
+                    externalId: qradarCase.caseNumber,
+                    name: qradarCase.title || `Case ${qradarCase.caseNumber}`,
+                    status: qradarCase.status, // Backend already normalizes status
+                    severity: qradarCase.severity || null,
+                    assignee: qradarCase.assignee?.name || qradarCase.assignee?.email || null,
+                    assigneeName: qradarCase.assignee?.name || null,
+                    createdAt: new Date(qradarCase.createdAt),
+                    modifiedAt: qradarCase.updatedAt ? new Date(qradarCase.updatedAt) : null,
+                    ticketId: parseInt(qradarCase.caseNumber) || 0,
+                    score: null,
+                    size: qradarCase.alertCount,
+                    integration: {
+                      id: qradarCase.integrationId,
+                      name: integration.name,
+                      source: "qradar",
+                    },
+                    alerts: qradarCase.alerts || [],
+                    mttrMinutes,
+                  }
                 })
                 
                 // Apply front-end filtering for status and severity as additional safety
@@ -437,17 +560,13 @@ export default function TicketsPage() {
                   filteredData = filteredData.filter((c: any) => c.severity === severityFilter)
                 }
                 
-                // Compute MTTR for QRadar, Stellar Cyber, and SOCFortress cases
-                const isQRadar = integration.source === "qradar" || integration.name?.toLowerCase().includes("qradar")
                 const isStellarCyber = integration.source === "stellar-cyber" || integration.name?.toLowerCase().includes("stellar")
                 const isSocfortress = integration.source === "socfortress" || integration.source === "copilot" || integration.name?.toLowerCase().includes("socfortress")
                 
                 const casesWithMttr = filteredData.map((c: any) => {
                   let mttrMinutes = null
                   
-                  if (isQRadar) {
-                    mttrMinutes = computeQRadarMttrMinutes(c)
-                  } else if (isStellarCyber) {
+                  if (isStellarCyber) {
                     // For Stellar Cyber cases
                     mttrMinutes = computeStellarMttrMinutes(c)
                   } else if (isSocfortress) {
@@ -481,227 +600,8 @@ export default function TicketsPage() {
 
         setCases(allCases)
         setStats(totalStats)
-        console.log("Fetched cases from all integrations:", allCases.length)
+        console.log("Fetched cases from integrations:", allCases.length)
         return
-      }
-
-      // Check if selected integration is Wazuh
-      const integration = integrations.find((i) => i.id === selectedIntegration)
-      const isWazuh = integration?.source === "wazuh" || integration?.name?.toLowerCase().includes("wazuh")
-      const isSocfortress = integration?.source === "socfortress" || integration?.source === "copilot" || integration?.name?.toLowerCase().includes("socfortress")
-
-      let response
-      let data
-
-      if (isWazuh) {
-        // Fetch from Wazuh API - always include date parameters
-        const shouldUseAbsolute = useAbsoluteDate && dateRange
-        const params = new URLSearchParams({
-          ...(shouldUseAbsolute && { from_date: formatLocalDate(dateRange.from) }),
-          ...(shouldUseAbsolute && { to_date: formatLocalDate(dateRange.to) }),
-          ...(!shouldUseAbsolute && { time_range: timeRange }),
-          ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
-          ...(severityFilter && severityFilter !== "all" && { severity: severityFilter }),
-        })
-        response = await fetch(`/api/wazuh/cases?${params}`)
-        data = await response.json()
-
-        if (data.cases) {
-          // Transform Wazuh cases to match Case interface
-          let mttrSum = 0
-          let mttrCount = 0
-          const transformedCases = data.cases.map((wazuhCase: any) => {
-            const mttrMinutes = computeWazuhMttrMinutes(wazuhCase)
-            if (mttrMinutes !== null && mttrMinutes !== undefined) {
-              mttrSum += mttrMinutes
-              mttrCount += 1
-            }
-
-            return {
-            id: wazuhCase.id,
-            externalId: wazuhCase.caseNumber,
-            name: wazuhCase.title || `Case ${wazuhCase.caseNumber}`,
-            status: wazuhCase.status === "open" ? "New" : wazuhCase.status === "in_progress" ? "In Progress" : "Resolved",
-            severity: wazuhCase.severity || null,
-            assignee: wazuhCase.assignee?.name || wazuhCase.assignee?.email || null,
-            assigneeName: wazuhCase.assignee?.name || null,
-            createdAt: new Date(wazuhCase.createdAt),
-            modifiedAt: wazuhCase.updatedAt ? new Date(wazuhCase.updatedAt) : null,
-            ticketId: parseInt(wazuhCase.caseNumber) || 0,
-            score: null,
-            size: wazuhCase.alertCount,
-            integration: {
-              id: selectedIntegration,
-              name: integration?.name || "Wazuh",
-              source: "wazuh",
-            },
-            // Include alerts data from Wazuh case
-            alerts: wazuhCase.alerts || [],
-            mttrMinutes,
-          }
-          })
-          setCases(transformedCases)
-          
-          // Calculate stats
-          const stats = {
-            total: data.cases.length,
-            open: data.cases.filter((c: any) => c.status === "open").length,
-            inProgress: data.cases.filter((c: any) => c.status === "in_progress").length,
-            resolved: data.cases.filter((c: any) => c.status === "resolved").length,
-            critical: data.cases.filter((c: any) => c.severity === "Critical").length,
-            avgMttr: mttrCount > 0 ? Math.round(mttrSum / mttrCount) : 0,
-          }
-          setStats(stats)
-          console.log("Fetched Wazuh cases:", data.cases.length)
-        }
-      } else if (isSocfortress) {
-        // Fetch from SOCFortress API
-        const params = new URLSearchParams({
-          integrationId: selectedIntegration,
-          ...(useAbsoluteDate && dateRange && { from_date: formatLocalDate(dateRange.from) }),
-          ...(useAbsoluteDate && dateRange && { to_date: formatLocalDate(dateRange.to) }),
-          ...(!useAbsoluteDate && { time_range: timeRange }),
-          ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
-          ...(severityFilter && severityFilter !== "all" && { severity: severityFilter }),
-        })
-
-        response = await fetch(`/api/cases?${params}`)
-        data = await response.json()
-        
-        console.log("[Tickets] API /api/cases response:", {
-          success: data.success,
-          caseCount: data.data?.length || 0,
-          firstCaseAlerts: data.data?.[0]?.alerts?.length || 0,
-          firstCaseMTTR: data.data?.[0]?.mttrMinutes,
-          allCasesAlerts: data.data?.map?.((c: any) => c.alerts?.length || 0) || []
-        })
-
-        if (data.success) {
-          // Transform SOCFortress cases to match Case interface
-          let mttrSum = 0
-          let mttrCount = 0
-          
-          const transformedCases = data.data.map((socfortressCase: any) => {
-            const mttrMinutes = socfortressCase.mttrMinutes || null
-            
-            if (mttrMinutes !== null && mttrMinutes !== undefined) {
-              mttrSum += mttrMinutes
-              mttrCount += 1
-            }
-            
-            console.log("[Tickets] Mapping case:", {
-              id: socfortressCase.id,
-              name: socfortressCase.name,
-              alerts: socfortressCase.alerts?.length || 0,
-              mttrMinutes,
-              alertSample: socfortressCase.alerts?.[0] ? { id: socfortressCase.alerts[0].id, title: socfortressCase.alerts[0].title } : null
-            })
-            return {
-            id: socfortressCase.id,
-            externalId: socfortressCase.externalId,
-            name: socfortressCase.name,
-            status: socfortressCase.status,
-            severity: socfortressCase.severity || "Low",
-            assignee: socfortressCase.assignee,
-            assigneeName: socfortressCase.assigneeName,
-            createdAt: new Date(socfortressCase.createdAt),
-            modifiedAt: socfortressCase.updatedAt ? new Date(socfortressCase.updatedAt) : null,
-            ticketId: socfortressCase.ticketId || 0,
-            score: null,
-            size: 0,
-            integration: {
-              id: selectedIntegration,
-              name: integration?.name || "SOCFortress",
-              source: "socfortress",
-            },
-            alerts: socfortressCase.alerts || [],
-            mttrMinutes,
-          }
-          })
-
-          console.log("[Tickets] Transformed SOCFortress cases:", {
-            count: transformedCases.length,
-            firstCaseAlerts: transformedCases[0]?.alerts?.length || 0,
-            mttrAvailable: mttrCount,
-          })
-
-          setCases(transformedCases)
-          setStats({
-            total: data.stats?.total ?? data.data.length,
-            open: data.stats?.open ?? transformedCases.filter((c: any) => c.status === "New").length,
-            inProgress: data.stats?.inProgress ?? transformedCases.filter((c: any) => c.status === "In Progress").length,
-            resolved: data.stats?.resolved ?? transformedCases.filter((c: any) => c.status === "Closed").length,
-            critical: data.stats?.critical ?? 0,
-            avgMttr: mttrCount > 0 ? Math.round(mttrSum / mttrCount) : 0,
-          })
-          console.log("Fetched SOCFortress cases:", data.data.length, "with MTTR:", mttrCount)
-        } else {
-          console.error("Failed to fetch SOCFortress cases:", data.error)
-          toast({
-            title: "Error",
-            description: data.error || "Failed to fetch SOCFortress cases",
-            variant: "destructive",
-          })
-        }
-      } else {
-        // Fetch from Stellar Cyber API (original logic)
-        const params = new URLSearchParams({
-          integrationId: selectedIntegration,
-          ...(useAbsoluteDate && dateRange && { from_date: formatLocalDate(dateRange.from) }),
-          ...(useAbsoluteDate && dateRange && { to_date: formatLocalDate(dateRange.to) }),
-          ...(!useAbsoluteDate && { time_range: timeRange }),
-          ...(statusFilter && statusFilter !== "all" && { status: statusFilter }),
-          ...(severityFilter && severityFilter !== "all" && { severity: severityFilter }),
-        })
-
-        response = await fetch(`/api/cases?${params}`)
-        data = await response.json()
-
-        if (data.success) {
-          // Compute MTTR for QRadar and Stellar Cyber cases
-          const isQRadar = integration?.source === "qradar" || integration?.name?.toLowerCase().includes("qradar")
-          const isStellarCyber = integration?.source === "stellar-cyber" || integration?.name?.toLowerCase().includes("stellar")
-          let mttrSum = 0
-          let mttrCount = 0
-          
-          const casesWithMttr = data.data.map((c: any) => {
-            let mttrMinutes = null
-            
-            if (isQRadar) {
-              console.log("QRadar case data:", { id: c.id, timestamp: c.createdAt, updatedAt: c.updatedAt })
-              mttrMinutes = computeQRadarMttrMinutes(c)
-              console.log("Computed MTTR for case:", c.id, "=", mttrMinutes, "minutes")
-            } else if (isStellarCyber) {
-              console.log("Stellar Cyber case data:", { id: c.id, createdAt: c.createdAt, latestAlertTime: c.metadata?.latest_alert_time })
-              mttrMinutes = computeStellarMttrMinutes(c)
-              console.log("Computed MTTR for case:", c.id, "=", mttrMinutes, "minutes")
-            }
-            
-            if (mttrMinutes !== null && mttrMinutes !== undefined) {
-              mttrSum += mttrMinutes
-              mttrCount += 1
-            }
-            return { ...c, mttrMinutes }
-          })
-          
-          setCases(casesWithMttr)
-          setStats({
-            total: data.stats?.total ?? data.data.length,
-            open: data.stats?.open ?? 0,
-            inProgress: data.stats?.inProgress ?? 0,
-            resolved: data.stats?.resolved ?? 0,
-            critical: data.stats?.critical ?? 0,
-            avgMttr: mttrCount > 0 ? Math.round(mttrSum / mttrCount) : (data.stats?.avgMttr ?? data.stats?.avgMttd ?? 0),
-          })
-          console.log("Fetched Stellar Cyber cases:", data.data.length)
-        } else {
-          console.error("Failed to fetch cases:", data.error)
-          toast({
-            title: "Error",
-            description: data.error || "Failed to fetch cases",
-            variant: "destructive",
-          })
-        }
       }
     } catch (error) {
       console.error("Error fetching cases:", error)
@@ -715,7 +615,7 @@ export default function TicketsPage() {
 
   // Sync cases
   const syncCases = async () => {
-    if (!selectedIntegration) {
+    if (!integrationFilter || integrationFilter.length === 0) {
       toast({
         title: "Error",
         description: "Please select an integration first",
@@ -726,80 +626,48 @@ export default function TicketsPage() {
 
     setSyncing(true)
     try {
-      // Handle sync all integrations
-      if (selectedIntegration === "all") {
-        console.log("Starting case sync for all integrations")
-        
-        for (const integration of integrations) {
-          try {
-            console.log(`Syncing cases for integration: ${integration.name} (${integration.id})`)
-            
-            const response = await fetch("/api/cases/sync", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                integrationId: integration.id,
-              }),
-            })
+      const isAllIntegrations = integrationFilter.includes("all")
+      const integrationsToSync = isAllIntegrations 
+        ? integrations 
+        : integrations.filter(i => integrationFilter.includes(i.id))
 
-            const data = await response.json()
+      console.log("Starting case sync for integrations:", integrationsToSync.map(i => i.name).join(", "))
+      
+      for (const integration of integrationsToSync) {
+        try {
+          console.log(`Syncing cases for integration: ${integration.name} (${integration.id})`)
+          
+          const response = await fetch("/api/cases/sync", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              integrationId: integration.id,
+            }),
+          })
 
-            if (data.success) {
-              console.log(`Sync completed for ${integration.name}: ${data.stats.created} new, ${data.stats.updated} updated`)
-            } else {
-              console.error(`Failed to sync ${integration.name}:`, data.error)
-            }
-          } catch (error) {
-            console.error(`Error syncing ${integration.name}:`, error)
+          const data = await response.json()
+
+          if (data.success) {
+            console.log(`Sync completed for ${integration.name}: ${data.stats.created} new, ${data.stats.updated} updated`)
+          } else {
+            console.error(`Failed to sync ${integration.name}:`, data.error)
           }
+        } catch (error) {
+          console.error(`Error syncing ${integration.name}:`, error)
         }
-
-        toast({
-          title: "Success",
-          description: "Sync completed for all integrations",
-        })
-
-        // Auto refresh data after successful sync
-        console.log("Sync completed for all integrations, refreshing data...")
-        await fetchCases()
-        await fetchIntegrations()
-        return
       }
 
-      // Original single integration sync
-      console.log("Starting case sync for integration:", selectedIntegration)
-
-      const response = await fetch("/api/cases/sync", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          integrationId: selectedIntegration,
-        }),
+      toast({
+        title: "Success",
+        description: `Sync completed for ${integrationsToSync.length} integration${integrationsToSync.length !== 1 ? "s" : ""}`,
       })
 
-      const data = await response.json()
-
-      if (data.success) {
-        toast({
-          title: "Success",
-          description: `Sync completed: ${data.stats.created} new, ${data.stats.updated} updated`,
-        })
-
-        // Auto refresh data after successful sync
-        console.log("Sync completed, refreshing data...")
-        await fetchCases()
-        await fetchIntegrations() // Refresh to update last sync time
-      } else {
-        toast({
-          title: "Error",
-          description: data.error || "Failed to sync cases",
-          variant: "destructive",
-        })
-      }
+      // Auto refresh data after successful sync
+      console.log("Sync completed, refreshing data...")
+      await fetchCases()
+      await fetchIntegrations()
     } catch (error) {
       console.error("Error syncing cases:", error)
       toast({
@@ -834,6 +702,72 @@ export default function TicketsPage() {
     }
   }
 
+  // Mouse move/up handlers for column resizing
+  useEffect(() => {
+    const onMove = (ev: MouseEvent) => {
+      const r = resizingRef.current
+      if (!r) return
+      const dx = ev.clientX - r.startX
+      const newW = Math.max(40, r.startWidth + dx)
+      setColumnWidths((prev) => ({ ...prev, [r.colId]: newW }))
+    }
+    const onUp = () => { resizingRef.current = null }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  // Handle sorting
+  const handleSort = (columnId: string) => {
+    if (sortBy === columnId) {
+      // Toggle sort direction
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      // New column, default to asc
+      setSortBy(columnId)
+      setSortDir('asc')
+    }
+  }
+
+  // Column definitions
+  const columns = [
+    { id: 'ticketId', label: 'Ticket ID' },
+    { id: 'name', label: 'Name' },
+    { id: 'status', label: 'Status' },
+    { id: 'severity', label: 'Severity' },
+    { id: 'integration', label: 'Integration' },
+    { id: 'assigneeName', label: 'Assignee' },
+    { id: 'createdAt', label: 'Created' },
+    { id: 'mttrMinutes', label: 'MTTR' },
+  ]
+
+  // Sort function
+  const getSortValue = (caseItem: Case, columnId: string): any => {
+    switch (columnId) {
+      case 'ticketId':
+        return caseItem.ticketId
+      case 'name':
+        return caseItem.name
+      case 'status':
+        return caseItem.status
+      case 'severity':
+        return caseItem.severity || ''
+      case 'assigneeName':
+        return getAssigneeName(caseItem.assignee, caseItem.assigneeName)
+      case 'createdAt':
+        return new Date(caseItem.createdAt).getTime()
+      case 'integration':
+        return caseItem.integration?.name || ''
+      case 'mttrMinutes':
+        return caseItem.mttrMinutes || 0
+      default:
+        return ''
+    }
+  }
+
   // Handle case action (edit)
   const handleCaseAction = (caseItem: Case) => {
     console.log("Opening case action dialog for:", caseItem)
@@ -859,24 +793,116 @@ export default function TicketsPage() {
     })
   }
 
-  // Filter cases based on search term and date range
-  const filteredCases = cases.filter((caseItem) => {
-    const matchesSearch =
-      caseItem.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      caseItem.externalId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (caseItem.assigneeName && caseItem.assigneeName.toLowerCase().includes(searchTerm.toLowerCase()))
-
-    // Filter by absolute date range if enabled
-    let matchesDateRange = true
-    if (useAbsoluteDate && dateRange) {
-      const caseTime = new Date(caseItem.createdAt).getTime()
-      const fromTime = dateRange.from.getTime()
-      const toTime = dateRange.to.getTime()
-      matchesDateRange = caseTime >= fromTime && caseTime <= toTime
+  // Handle case delete
+  const handleDeleteCase = async (caseItem: Case) => {
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      `Are you sure you want to delete case "${caseItem.name}" (${caseItem.externalId})? This action cannot be undone.`
+    )
+    
+    if (!confirmed) {
+      return
     }
 
-    return matchesSearch && matchesDateRange
-  })
+    try {
+      let url = ''
+      
+      // Determine the correct endpoint based on integration source
+      if (caseItem.integration?.source === 'wazuh') {
+        url = `/api/wazuh/cases/${caseItem.id}`
+      } else if (caseItem.integration?.source === 'qradar') {
+        url = `/api/qradar/cases/${caseItem.id}`
+      } else {
+        // For Stellar Cyber and SOCFortress
+        url = `/api/cases/${caseItem.id}`
+      }
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to delete case')
+      }
+
+      toast({
+        title: "Success",
+        description: `Case "${caseItem.name}" deleted successfully`,
+      })
+
+      // Refresh the cases data after delete
+      await fetchCases()
+    } catch (error) {
+      console.error('Error deleting case:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to delete case',
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Filter cases based on search term only
+  // Note: Date filtering is already handled by the API (server-side)
+  // Client-side date filtering causes timezone issues, so we skip it
+  const filteredCases = cases
+    .filter((caseItem) => {
+      const matchesSearch =
+        caseItem.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        caseItem.externalId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (caseItem.assigneeName && caseItem.assigneeName.toLowerCase().includes(searchTerm.toLowerCase()))
+
+      return matchesSearch
+    })
+    .sort((a, b) => {
+      const aVal = getSortValue(a, sortBy)
+      const bVal = getSortValue(b, sortBy)
+      
+      // Handle null/undefined values
+      if (aVal == null && bVal == null) return 0
+      if (aVal == null) return sortDir === 'asc' ? 1 : -1
+      if (bVal == null) return sortDir === 'asc' ? -1 : 1
+      
+      // Compare values
+      let comparison = 0
+      if (aVal < bVal) comparison = -1
+      else if (aVal > bVal) comparison = 1
+      
+      return sortDir === 'asc' ? comparison : -comparison
+    })
+
+  const handleExportTickets = async () => {
+    if (filteredCases.length === 0) {
+      toast({
+        title: "No data to export",
+        description: "No cases match the current filters.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setExporting(true)
+      await exportTicketsToExcel(filteredCases)
+      toast({
+        title: "Export successful",
+        description: "Ticket report has been downloaded.",
+      })
+    } catch (error) {
+      console.error("Error exporting tickets:", error)
+      toast({
+        title: "Export failed",
+        description: "Failed to generate Excel file.",
+        variant: "destructive",
+      })
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Calculate pagination
   const calculatedTotalPages = Math.ceil(filteredCases.length / pageSize) || 1
@@ -919,12 +945,12 @@ export default function TicketsPage() {
   }, [integrations])
 
   useEffect(() => {
-    if (selectedIntegration) {
+    if (integrationFilter && integrationFilter.length > 0) {
       setLoading(true)
       setCurrentPage(1) // Reset to page 1 when filters change
       fetchCases().finally(() => setLoading(false))
     }
-  }, [selectedIntegration, timeRange, statusFilter, severityFilter, useAbsoluteDate, dateRange])
+  }, [integrationFilter, timeRange, statusFilter, severityFilter, useAbsoluteDate, dateRange])
 
   // Update action case when cases data changes (after sync/update)
   useEffect(() => {
@@ -950,13 +976,31 @@ export default function TicketsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={handleExportTickets}
+            disabled={exporting || loading || syncing || filteredCases.length === 0}
+            variant="outline"
+            size="sm"
+          >
+            {exporting ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-2" />
+                Export Excel
+              </>
+            )}
+          </Button>
           <Button onClick={refreshData} disabled={refreshing || syncing} variant="outline" size="sm">
             <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
           <Button
             onClick={syncCases}
-            disabled={syncing || !selectedIntegration}
+            disabled={syncing || !integrationFilter || integrationFilter.length === 0}
             size="sm"
           >
             <Sync className={`h-4 w-4 mr-2 ${syncing ? "animate-spin" : ""}`} />
@@ -1063,27 +1107,46 @@ export default function TicketsPage() {
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
               <div className="space-y-2">
                 <Label htmlFor="integration">Integration</Label>
-                <Select value={selectedIntegration} onValueChange={setSelectedIntegration}>
-                  <SelectTrigger>
-                    <SelectValue 
-                      placeholder={
-                        selectedIntegration === "all"
-                          ? "All Integrations"
-                          : integrations.find((i) => i.id === selectedIntegration)?.name || "Select integration"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Integrations</SelectItem>
-                    {integrations
-                      .filter((i) => user?.role === 'administrator' || accessibleIntegrationIds.includes(i.id))
-                      .map((integration) => (
-                        <SelectItem key={integration.id} value={integration.id}>
-                          {integration.name}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={integrationPopoverOpen} onOpenChange={setIntegrationPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between">
+                      <span>{getIntegrationDisplayLabel()}</span>
+                      <ChevronDown className="h-4 w-4 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-3" align="start">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 py-1">
+                        <Checkbox
+                          id="integration-all"
+                          checked={isAllIntegrations}
+                          onCheckedChange={handleSelectAllIntegrations}
+                        />
+                        <label htmlFor="integration-all" className="text-sm font-medium cursor-pointer flex-1">
+                          All Integrations
+                        </label>
+                      </div>
+                      <div className="border-t pt-2">
+                        {integrations
+                          .filter((i) => user?.role === 'administrator' || accessibleIntegrationIds.includes(i.id))
+                          .map((integration) => (
+                            <div key={integration.id} className="flex items-center gap-2 py-1">
+                              <Checkbox
+                                id={`integration-${integration.id}`}
+                                checked={integrationFilter.includes(integration.id)}
+                                onCheckedChange={(checked) =>
+                                  handleSelectIntegration(integration.id, !!checked)
+                                }
+                              />
+                              <label htmlFor={`integration-${integration.id}`} className="text-sm cursor-pointer flex-1">
+                                {integration.name}
+                              </label>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="timeRange">Time Range</Label>
@@ -1184,11 +1247,11 @@ export default function TicketsPage() {
               <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
               <h3 className="text-lg font-semibold mb-2">No cases found</h3>
               <p className="text-muted-foreground mb-4">
-                {selectedIntegration
+                {integrationFilter && integrationFilter.length > 0
                   ? "No cases match your current filters. Try adjusting the time range or filters."
                   : "Please select an integration to view cases."}
               </p>
-              {selectedIntegration && selectedIntegration !== "all" && (
+              {integrationFilter && integrationFilter.length > 0 && !isAllIntegrations && (
                 <Button onClick={syncCases} disabled={syncing}>
                   <Sync className="h-4 w-4 mr-2" />
                   Sync Cases
@@ -1199,22 +1262,57 @@ export default function TicketsPage() {
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>Ticket ID</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Severity</TableHead>
-                    <TableHead>Assignee</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>MTTR</TableHead>
-                    <TableHead>Actions</TableHead>
+                  <TableRow className="bg-muted/50">
+                    {columns.map((col) => {
+                      const w = columnWidths[col.id]
+                      const style = w ? { width: `${w}px`, minWidth: `${w}px` } : undefined
+                      const isSorted = col.id === sortBy
+                      return (
+                        <TableHead key={col.id} style={style} className="relative">
+                          <div className="flex items-center gap-2 pr-6">
+                            <button
+                              className="text-sm font-medium flex items-center gap-2 hover:text-foreground transition-colors"
+                              onClick={() => handleSort(col.id)}
+                              type="button"
+                              aria-label={`Sort by ${col.label}`}
+                            >
+                              <span>{col.label}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {isSorted ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                              </span>
+                            </button>
+
+                            <div
+                              role="separator"
+                              onMouseDown={(e) => {
+                                const headerEl = (e.currentTarget as HTMLElement).closest('th') as HTMLElement | null
+                                const startWidth = columnWidths[col.id] || headerEl?.clientWidth || 150
+                                resizingRef.current = { colId: col.id, startX: e.clientX, startWidth }
+                                e.preventDefault()
+                              }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 cursor-col-resize flex items-center justify-center z-50"
+                              style={{ pointerEvents: 'auto' }}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-hidden
+                            >
+                              <div className="flex flex-col gap-0.5 items-center">
+                                <span className="block w-4 h-0.5 bg-slate-400" />
+                                <span className="block w-4 h-0.5 bg-slate-400" />
+                                <span className="block w-4 h-0.5 bg-slate-400" />
+                              </div>
+                            </div>
+                          </div>
+                        </TableHead>
+                      )
+                    })}
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedCases.map((caseItem) => {
                     const StatusIcon = statusIcons[caseItem.status as keyof typeof statusIcons] || AlertCircle
                     return (
-                      <TableRow key={caseItem.id}>
+                      <TableRow key={`${caseItem.integration?.id || 'unknown'}-${caseItem.id}`}>
                         <TableCell className="font-mono text-sm">#{caseItem.ticketId}</TableCell>
                         <TableCell>
                           <div className="font-medium">{caseItem.name}</div>
@@ -1247,6 +1345,25 @@ export default function TicketsPage() {
                           )}
                         </TableCell>
                         <TableCell>
+                          {(() => {
+                            const src = caseItem.integration?.source
+                            const name = caseItem.integration?.name || '-'
+                            const colorMap: Record<string, string> = {
+                              wazuh: 'bg-blue-100 text-blue-800',
+                              qradar: 'bg-purple-100 text-purple-800',
+                              'stellar-cyber': 'bg-indigo-100 text-indigo-800',
+                              socfortress: 'bg-orange-100 text-orange-800',
+                              copilot: 'bg-orange-100 text-orange-800',
+                            }
+                            const colorClass = (src && colorMap[src]) || 'bg-gray-100 text-gray-800'
+                            return (
+                              <Badge className={colorClass}>
+                                {name}
+                              </Badge>
+                            )
+                          })()}
+                        </TableCell>
+                        <TableCell>
                           <div className="flex items-center gap-1">
                             {(() => {
                               const displayName = getAssigneeName(caseItem.assignee, caseItem.assigneeName)
@@ -1277,6 +1394,16 @@ export default function TicketsPage() {
                             {hasPermission(useAuthStore.getState().user?.role || '', 'update_case') && (
                               <Button variant="ghost" size="sm" onClick={() => handleCaseAction(caseItem)}>
                                 <Edit className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {useAuthStore.getState().user?.role === 'administrator' && (
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleDeleteCase(caseItem)}
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              >
+                                <Trash className="h-4 w-4" />
                               </Button>
                             )}
                           </div>

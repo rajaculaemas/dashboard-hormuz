@@ -22,7 +22,8 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("[TEST] Creating QRadar client...")
-    const qradarClient = new QRadarClient({ host, api_key: apiKey })
+    const domainId = credentials.domain_id ? Number(credentials.domain_id) : undefined
+    const qradarClient = new QRadarClient({ host, api_key: apiKey, domain_id: domainId })
 
     // Test with first offense
     const offense = await prisma.qRadarOffense.findFirst({

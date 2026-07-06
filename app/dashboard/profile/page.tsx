@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Edit2, Lock } from 'lucide-react';
+import { StellarCyberKeyManagement } from '@/components/profile/stellar-cyber-key-management';
 
 export default function ProfilePage() {
   const { user } = useAuth();
@@ -444,6 +445,10 @@ export default function ProfilePage() {
           )}
         </CardContent>
       </Card>
+
+      {userData?.id && (
+        <StellarCyberKeyManagement userId={userData.id} />
+      )}
     </div>
   );
 }
