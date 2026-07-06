@@ -83,3 +83,7 @@ qradar.log
 'ql -h localhost*'
 'raw data alert'
 't prisma = new PrismaClient();'
+
+# additional scripts directory
+scripts/test-*.py
+app/api/test-case/
