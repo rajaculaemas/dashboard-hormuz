@@ -25,6 +25,7 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+.env.*
 
 # vercel
 .vercel
@@ -32,3 +33,53 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# sensitive: environment & secrets
+.telegram-update-id
+*.pem
+*.key
+*.cert
+
+# sensitive: test & debug scripts (all levels)
+test-*.js
+test-*.mjs
+test-*.sh
+test-*.ts
+check-*.js
+check-*.mjs
+check-*.sh
+check-*.ts
+analysis-*.js
+delete-*.js
+fetch-*.mjs
+find-*.js
+inspect-*.js
+manual-*.mjs
+resync-*.mjs
+resync-*.sh
+resync-*.ts
+sync-*.mjs
+sync-*.js
+sync-now.js
+verify-*.js
+batch-sync-*.mjs
+telegram-polling-client.js
+
+# sensitive: notes & documentation (project-specific)
+ESCALATION_IMPLEMENTATION.md
+ESCALATION_SCHEMA_ANALYSIS.md
+TIME_FILTERING_SUMMARY.md
+CRON_SETUP_EXAMPLES.md
+SHIFT_NOTIFICATION_*.md
+
+# build output logs & junk files
+build_output.txt
+tsc_output.txt
+*.log
+qradar.log
+
+# junk files with special characters
+': qradar, mode: insensitive }'
+'ql -h localhost*'
+'raw data alert'
+'t prisma = new PrismaClient();'
