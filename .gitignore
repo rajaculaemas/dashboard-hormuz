@@ -87,3 +87,25 @@ qradar.log
 # additional scripts directory
 scripts/test-*.py
 app/api/test-case/
+
+# Junk files
+': qradar, mode: insensitive }'
+'aux | grep postgres'
+'ql -h localhost*'
+'raw data alert'
+'t prisma = new PrismaClient();'
+
+# SQL scripts (data manipulation)
+delete-*.sql
+preview-*.sh
+preview-*.ts
+
+# Log files
+server.log
+*.log
+
+# Standalone script files (not in scripts/ or app/api)
+telegram-polling-client.js
+
+# Test shell scripts
+test*.sh
